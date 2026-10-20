@@ -275,8 +275,17 @@ void loop1() {
     Command cmd;
     memcpy(&cmd, (const void*)&mailbox, sizeof(cmd));
     if (cmd.setAtt) {
+      // Designer guidance (AI6YM): the attenuator bit-bang is not I2C-safe
+      // for the Si5351 while transmitting, so blank the RF around the
+      // write and re-tune to restore known PLL/MS register state.
+      bool rfWasOn = (curMode != RF_OFF);
+      if (rfWasOn) setRf(false);
       programAttenuator(cmd.attenuation);
       curAtt = cmd.attenuation;
+      if (rfWasOn) {
+        tuneCarrier(curFreqMHz);
+        setRf(true);
+      }
     }
     if (cmd.setFreq) {
       curFreqMHz = cmd.freqMHz;
