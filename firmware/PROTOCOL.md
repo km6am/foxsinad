@@ -31,6 +31,17 @@ Async events:
 
 Facts a host driver should rely on:
 
+- `ATT` (and `FREQ`) apply **live during TONE/CARRIER** and never trigger
+  a morse ID — ID fires only on the 9-min auto timer, on an RF-off
+  command, or on an explicit `ID`. A sweep therefore holds the tone on
+  for the whole run and only steps `ATT`. The attenuator write stalls the
+  modulation for well under 1 ms (it borrows the I2C pins between
+  samples); discard a settle window after each step as usual. Caveat:
+  upstream only ever programs the attenuator with RF off, so
+  glitch-free-while-transmitting is designed-for but unverified until
+  the bench smoke test (listen on a monitor receiver while stepping
+  `ATT` mid-tone).
+
 - Boot state: RF off, attenuator at maximum (127), no callsign — the
   device cannot transmit until `CALL` is set.
 - Replies are synchronous: `OK` means the RF core has *applied* the
