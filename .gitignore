@@ -1,0 +1,13 @@
+# run outputs (cal tables in cal/ ARE tracked -- they're small and load-bearing)
+runs/
+*.csv
+*.png
+*.pdf
+
+__pycache__/
+*.egg-info/
+.venv/
+
+# firmware build artifacts
+firmware/build/
+*.uf2

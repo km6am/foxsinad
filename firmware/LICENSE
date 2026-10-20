@@ -1,0 +1,12 @@
+The firmware in this directory is a derivative work of PicoFox-Firmware,
+Copyright 2025 Giorgi Enterprises LLC dba AI6YM.radio
+(https://github.com/ai6ym/PicoFox), and is licensed under the same terms:
+
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+(CC BY-NC-SA 4.0), https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+COMMERCIAL USE IS FORBIDDEN WITHOUT PERMISSION FROM THE UPSTREAM
+COPYRIGHT HOLDER.
+
+This license applies to firmware/ only. The rest of the foxsinad
+repository is licensed separately (see the repository root).

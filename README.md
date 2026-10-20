@@ -7,7 +7,7 @@ a radio's 12 dB SINAD point — on the bench or on a SOTA summit. The
 summit-vs-baseline delta is measured desense, ground truth for the
 [sota-rf](../sota-rf) risk tiers.
 
-Status: **design approved, not yet implemented.** See
+Status: **scaffold + firmware fork built (compiles; bench smoke test pending).** See
 [docs/plans/2026-10-20-foxsinad-design.md](docs/plans/2026-10-20-foxsinad-design.md)
 for the design and
 [docs/plans/2026-10-20-foxsinad-implementation.md](docs/plans/2026-10-20-foxsinad-implementation.md)

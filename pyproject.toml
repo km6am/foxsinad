@@ -1,0 +1,19 @@
+[project]
+name = "foxsinad"
+version = "0.1.0"
+description = "Portable 12 dB SINAD / receiver-desense field kit: PicoFox r3 source + sound-card SINAD analyzer"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "pyserial",
+    "sounddevice",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["foxsinad"]
