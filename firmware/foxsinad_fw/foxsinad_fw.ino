@@ -34,6 +34,12 @@ Library: Etherkit Si5351.
 #define ID3 25u
 #define SDA_PIN 0u
 #define SCL_PIN 1u
+// Upstream builds against AI6YM's arduino-pico fork whose "ai6ym_picofox"
+// variant maps Wire0 to GPIO 0/1 and the LED to GPIO 3. We build on
+// mainline Arduino-Pico (plain rpipico variant: Wire0 on 4/5, LED on 25),
+// so both must be set explicitly or I2C lands on the wrong pins -- GPIO 4
+// is the attenuator latch -- and the Si5351 never hears a write.
+#define LED_PIN 3u
 #define I2C_CLOCK_HZ 1000000  // >= 800 kHz needed for per-sample PLL writes.
 #define AMP_EN 2u             // LOW enables the RF amplifier.
 #define ATTN_LE 4u            // Latch pin of the BVA1761 attenuator.
@@ -95,6 +101,8 @@ int16_t sineTable[256];
 // ---- I2C / attenuator (from upstream: shared pins, never concurrent) ----
 void startWire() {
   if (wireRunning) return;
+  Wire.setSDA(SDA_PIN);  // mainline variant defaults to 4/5; see LED_PIN note
+  Wire.setSCL(SCL_PIN);
   Wire.begin();
   Wire.setClock(I2C_CLOCK_HZ);
   wireRunning = true;
@@ -153,7 +161,7 @@ void programAttenuator(uint8_t attenuation) {
 void setRf(bool enabled) {
   si5351.output_enable(SI5351_CLOCK_OUTPUT, enabled ? 1 : 0);
   digitalWrite(AMP_EN, enabled ? LOW : HIGH);
-  digitalWrite(LED_BUILTIN, enabled ? HIGH : LOW);
+  digitalWrite(LED_PIN, enabled ? HIGH : LOW);
 }
 
 void tuneCarrier(double freqMHz) {
@@ -523,8 +531,8 @@ void setup() {
 
   pinMode(AMP_EN, OUTPUT);
   digitalWrite(AMP_EN, HIGH);  // amp off
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
 
   if (revision == 3) {
     programAttenuator(curAtt);  // max attenuation until commanded otherwise
