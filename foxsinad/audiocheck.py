@@ -17,7 +17,7 @@ import numpy as np
 import sounddevice
 
 from .analyzer import CLIP_LEVEL, UNDER_RANGE_PEAK, list_devices, make_bandpass, \
-    pick_device, sinad_db
+    output_twin, pick_device, sinad_db
 
 FS = 48000
 
@@ -74,13 +74,14 @@ def cmd_level(args):
 
 
 def cmd_loopback(args):
-    dev = pick_device(args.device, need_output=True)
+    dev = pick_device(args.device)
+    out = output_twin(dev)
     secs = args.seconds
     t = np.arange(int(FS * (secs + 0.5))) / FS
     tone = (10 ** (args.level_dbfs / 20) * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)
-    print(f"Playing 1 kHz at {args.level_dbfs} dBFS on the adapter's output and recording its "
-          f"input for {secs:g} s.\nConnect line OUT to line IN; LINE switch on.")
-    rec = sounddevice.playrec(tone, samplerate=FS, channels=1, device=(dev, dev), blocking=True)
+    print(f"Playing 1 kHz at {args.level_dbfs} dBFS on [{out}] and recording [{dev}] for "
+          f"{secs:g} s.\nConnect line OUT to line IN; LINE switch on.")
+    rec = sounddevice.playrec(tone, samplerate=FS, channels=1, device=(dev, out), blocking=True)
     rec = rec[int(FS * 0.5):, 0]          # drop the first 0.5 s (start-up)
     r = analyze(rec)
     print(f"\nlevel:  peak {r['peak_dbfs']:.1f} dBFS, rms {r['rms_dbfs']:.1f} dBFS")

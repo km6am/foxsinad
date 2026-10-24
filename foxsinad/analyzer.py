@@ -127,10 +127,10 @@ class SinadAnalyzer:
         )
 
 
-# Names a USB line-in adapter may show up under. The UFO202's codec chip
-# (TI PCM2902) may enumerate under its generic "USB Audio CODEC" name
-# rather than "UFO202"; on that basis this list is a guess, so pick_device()
-# prints what it chose and --device overrides it.
+# Names a USB line-in adapter may show up under. Measured: the UFO202
+# appears on macOS as "USB Audio CODEC" (its codec chip's name), split into
+# an input-only device and an output-only device. pick_device() prints what
+# it chose, and --device overrides it.
 AUTO_NAMES = ("UFO202", "USB Audio CODEC", "USB AUDIO CODEC", "USB Audio Device")
 
 
@@ -145,6 +145,16 @@ def find_device(name_fragment, need_output=False):
         if n_in and (n_out or not need_output) and name_fragment.lower() in name.lower():
             return idx
     raise LookupError(f"no input device matching {name_fragment!r}")
+
+
+def output_twin(input_idx):
+    """The output-only device with the same name as an input-only one:
+    macOS splits USB audio adapters like the UFO202 into two devices."""
+    name = sounddevice.query_devices(input_idx)["name"]
+    for idx, n, _, n_out, _ in list_devices():
+        if n_out and n == name:
+            return idx
+    raise LookupError(f"no output device named {name!r} to pair with input [{input_idx}]")
 
 
 def pick_device(spec=None, need_output=False):
