@@ -46,7 +46,8 @@ or software problem to fix first. Record the number.
 
 ## 3. Radio audio, at a strong signal
 
-Connect the full chain above. Set the radio to 145.55 MHz with the
+Connect the full chain above, with the step attenuator set low enough
+that the tone is clearly audible on the radio. Set the radio to 145.55 MHz with the
 **squelch fully open**. Start a strong tone:
 
 ```bash
@@ -69,6 +70,8 @@ At a strong signal it should read high, though never above about 23.6 dB
 $PY -m foxsinad.picofox --att 127
 ```
 
+(or turn the step attenuator up).
+
 Finish with `$PY -m foxsinad.picofox --off`.
 
 ## 4. Leak test (don't skip)
@@ -86,23 +89,36 @@ PicoFox or its USB cable, or leaking through the radio's case. Move them
 apart, shield the PicoFox, or both, until it stays at the bottom.
 Otherwise every sweep will read optimistically.
 
-## 5. Choosing the fixed attenuation
+## 5. Set the step attenuator (ballpark)
 
-The PicoFox's attenuator covers about +12 to −20 dBm, a 32 dB window. The
-fixed attenuators decide where that window lands at the radio. For a
-radio whose 12 dB SINAD point is near L dBm, the total pad must be
-between about −L − 20 and −L + 12 dB:
-- around −120 dBm: between 100 and 132 dB
-- about 115 dB puts the point mid-window
+The PicoFox's attenuator covers only about 32 dB, from +12 to −20 dBm. A
+manual step attenuator between the PicoFox and the radio has to place
+the radio's 12 dB SINAD point inside that window. The best place is the
+middle, so the sweep has room either way.
 
-The sweep tells you if you've missed. If SINAD is still above 12 dB at
-`ATT 127`, it says to add attenuation. If it's below 12 dB at `ATT 0`, it
-says to remove some.
+```bash
+$PY -m foxsinad.ballpark
+```
+
+1. **Set the step attenuator to MAXIMUM first**, then press Enter. The
+   PicoFox transmits the tone at `ATT 64`, the middle of its range (about
+   −4 dBm).
+2. Reduce the step attenuator while watching the live SINAD and its hint.
+   It reads "too strong", "too weak", or **"GOOD: about 12 dB"**.
+3. At "GOOD", press **Ctrl-C**. RF turns off (with the Morse ID).
+4. Enter the **total** external attenuation: the step attenuator setting
+   plus any fixed pads plus cable loss.
+5. It prints the exact sweep command, with that value as `--pad-db`.
+
+The sweep can only be as accurate as that total. A step attenuator's own
+accuracy, and the cable losses, go straight into every level it reports.
 
 ## 6. First sweep
 
+Run the command `ballpark` printed, for example:
+
 ```bash
-$PY -m foxsinad.sweep --pad-db 115 --label TIDH3_bench
+$PY -m foxsinad.sweep --pad-db 108.5 --label TIDH3_bench
 ```
 
 **What the sweep does:**
