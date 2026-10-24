@@ -263,7 +263,11 @@ def t3_deviation(hp, fox, args):
     fox.set_freq(f)
     fox.set_att(40)
     hp.scpi(f"RFAN:FREQ {f} MHZ")
-    afan_setup(hp, filt2="15kHz LPF", sel="FM Deviation")
+    # FM deviation is not a MEAS:AFR:SEL menu entry - it is the AF
+    # analyzer's own level field whenever AF Anl In = FM Demod, read
+    # directly with MEAS:AFR:FM?. Select 'AF Freq' so the Part-B
+    # frequency readback (MEAS:AFR:AFR?) is the displayed measurement.
+    afan_setup(hp, filt2="15kHz LPF", sel="AF Freq")
 
     rows = []
     print("Part A: deviation linearity at 1 kHz tone")
@@ -279,7 +283,7 @@ def t3_deviation(hp, fox, args):
         fox.tone(hz, 3000)
         time.sleep(args.settle)
         khz, sd = hp.scpiq_float("MEAS:AFR:FM?", n=5, settle_s=0.3)
-        afr = hp.scpiq("MEAS:AFR:AFR?")
+        afr = hp.scpiq("MEAS:AFR:FREQ?")
         rows.append(("flatness", hz, 3000, round(khz * 1000, 1), round(sd * 1000, 1)))
         print(f"tone {hz:4d} Hz -> dev {khz*1000:7.1f} Hz (sd {sd*1000:.1f}) afr {afr}")
     fox.off()
