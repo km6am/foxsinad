@@ -169,6 +169,19 @@ $PY -m foxsinad.sweep --pad-db 119 --radio uvk5 --condition bench
 - readings stream to a `.partial.csv` while it runs, so a stopped run
   keeps its data
 
+**Options:**
+- `--live` opens a plot that fills in as readings come (closes 3 s after
+  the run; `--hold` keeps it open).
+- `--repeat N` runs it N times; with `--session`, a repeatability summary
+  is printed at the end.
+- `--quick` shortens settling and averaging (about 1 minute per run
+  instead of 1.6; not yet checked for repeatability).
+
+**Antenna to antenna:** the path loss between the antennas isn't known, so
+set `--pad-db` to the attenuators only. The "level at the radio" is then
+really the level at the PicoFox's antenna, a fixed offset from the truth.
+Runs remain comparable with each other, but not with conducted results.
+
 **Accuracy:** the level at the radio is the T1 cal-table value for each
 setting minus `--pad-db`. So it's only as good as the cal table (measured
 at 145.55 MHz) and as your knowledge of the attenuators and cables.

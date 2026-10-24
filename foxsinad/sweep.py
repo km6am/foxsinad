@@ -181,6 +181,7 @@ def run(args):
     started = datetime.now()
 
     rows = []
+    live = LivePlot(f"{label}  (pad {args.pad_db:g} dB)") if getattr(args, "live", False) else None
     with PicoFox(args.port) as fox, SinadAnalyzer(dev, monitor=mon) as an:
         print("PicoFox:", fox.hello())
         fox.set_call(args.call)
@@ -214,6 +215,8 @@ def run(args):
                            datetime.now().isoformat(timespec="milliseconds"),
                            att, r.n_discarded]
                     rows.append(dict(zip(columns, row)))
+                    if live:
+                        live.add(phase, lvl, r.sinad_db)
                     w.writerow(row)
                     fh.flush()
                     flags = (" CLIP" if r.peak >= CLIP_LEVEL else "") + \
@@ -288,15 +291,64 @@ def run(args):
             print(f"     +/- is the fit's statistical uncertainty ({npts} points); it "
                   "excludes the cal table and --pad-db.")
     plot(final, rows, point)
+    if live:
+        live.finish(point, hold_s=None if getattr(args, "hold", False) else 3.0)
     return point
 
 
-def plot(path, rows, point):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+class LivePlot:
+    """A window that draws each reading as it's taken (like run.py's live
+    plot). Closes itself at the end of the run unless hold_s is None."""
 
-    fig, ax = plt.subplots(figsize=(7.6, 4.4))
+    def __init__(self, title):
+        import matplotlib.pyplot as plt
+        self.plt = plt
+        plt.ion()
+        self.fig, self.ax = plt.subplots(figsize=(7.6, 4.4))
+        self.fig.canvas.manager.set_window_title(title)
+        self.ax.axhline(TARGET_DB, color="#9a9892", ls="--", lw=1)
+        self.lines = {
+            "coarse": self.ax.plot([], [], "o", ms=4, mfc="none", color="#2a78d6",
+                                   label="coarse")[0],
+            "fine": self.ax.plot([], [], "o", ms=4, color="#2a78d6", label="fine")[0],
+        }
+        self.data = {"coarse": [], "fine": []}
+        self.ax.set_xlabel("level at the radio (dBm)")
+        self.ax.set_ylabel("SINAD (dB)")
+        self.ax.set_title(title, loc="left", fontsize=10)
+        self.ax.grid(alpha=0.3)
+        self.ax.legend(frameon=False, fontsize=8.5, loc="upper left")
+        self.fig.tight_layout()
+        self.plt.pause(0.05)
+
+    def add(self, phase, level, sinad):
+        self.data[phase].append((level, sinad))
+        self.lines[phase].set_data(*zip(*self.data[phase]))
+        self.ax.relim()
+        self.ax.autoscale_view()
+        self.plt.pause(0.01)
+
+    def finish(self, point, hold_s=3.0):
+        if point is not None:
+            self.ax.axvline(point, color="#eb6834", lw=1)
+            self.ax.annotate(f"12 dB SINAD: {point:.1f} dBm", xy=(point, TARGET_DB),
+                             xytext=(6, 8), textcoords="offset points",
+                             color="#eb6834", fontsize=9)
+        if hold_s is None:
+            self.plt.ioff()
+            self.plt.show()          # stays until you close the window
+        else:
+            self.plt.pause(hold_s)
+            self.plt.close(self.fig)
+
+
+def plot(path, rows, point):
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    fig = Figure(figsize=(7.6, 4.4))
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot()
     for phase, style in (("coarse", dict(mfc="none")), ("fine", dict())):
         pts = sorted((r["level_dbm"], r["sinad_db"]) for r in rows if r["phase"] == phase)
         if pts:
@@ -344,11 +396,32 @@ def main():
                    help="also play the audio on the computer's speakers")
     p.add_argument("--monitor-device", metavar="OUTPUT",
                    help="play it on this output instead (name or number)")
+    p.add_argument("--live", action="store_true",
+                   help="live plot window, closed 3 s after each run (see --hold)")
+    p.add_argument("--hold", action="store_true",
+                   help="with --live: keep the plot open until you close it")
+    p.add_argument("--quick", action="store_true",
+                   help="faster: settle 0.5 s, coarse 0.75 s, fine 1.5 s per reading "
+                        "(about 1 min per run instead of 1.6)")
+    p.add_argument("--repeat", type=int, default=1, metavar="N",
+                   help="run the sweep N times in a row (stops at the first error)")
     args = p.parse_args()
+    if args.quick:
+        args.settle, args.avg_coarse, args.avg_fine = 0.5, 0.75, 1.5
     try:
-        run(args)
+        for i in range(1, args.repeat + 1):
+            if args.repeat > 1:
+                print(f"\n=== run {i} of {args.repeat}, {datetime.now().strftime('%H:%M:%S')}")
+            run(args)
     except (LookupError, PicoFoxError) as e:
         sys.exit(f"error: {e}")
+    except KeyboardInterrupt:
+        sys.exit("\nstopped (RF was turned off)")
+    if args.repeat > 1 and args.session:
+        print()
+        from .repeatability import main as summarize_main
+        sys.argv = ["repeatability", str(RUNS / slug(args.session))]
+        summarize_main()
 
 
 if __name__ == "__main__":
