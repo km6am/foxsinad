@@ -34,12 +34,14 @@ def hint(r):
     if r.peak >= CLIP_LEVEL:
         return "audio clipping: turn the radio's volume down"
     s = r.sinad_db
+    # The sweep has ~16 dB of PicoFox range either side of ATT 64, so
+    # anywhere within a few dB of 12 is good enough.
     if s >= 20:
         return "far too strong: add a lot of attenuation (tens of dB)"
-    if s > 14:
+    if s > 16:
         return "too strong: add attenuation"
-    if s >= 10:
-        return "GOOD: about 12 dB. Press Ctrl-C."
+    if s >= 9:
+        return "GOOD (12 dB +/- a few is fine). Press Ctrl-C."
     if s >= 4:
         return "too weak: remove attenuation"
     return "nothing yet (noise only): remove attenuation"
