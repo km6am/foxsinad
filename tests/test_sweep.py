@@ -79,9 +79,9 @@ def test_finds_the_12db_point():
     args = sweep.argparse.Namespace(
         pad_db=PAD_DB, label="stub", condition="bench", note="", call="N0CALL",
         freq=145.55, tone=1000, dev=3000, settle=0.0, avg_coarse=0.0, avg_fine=0.0,
-        device=None, port=None, cal=str(sweep.DEFAULT_CAL))
+        device=None, port=None, cal=str(sweep.DEFAULT_CAL), monitor=None)
     an = StubAnalyzer(None)
-    sweep.SinadAnalyzer = lambda device: an
+    sweep.SinadAnalyzer = lambda device, **kw: an
     point = sweep.run(args)
     assert point is not None and abs(point - TRUE_12DB_DBM) < 0.3, point
     rows = [l for l in next(sweep.RUNS.glob("*.csv")).read_text().splitlines()

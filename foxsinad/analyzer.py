@@ -16,7 +16,9 @@ CLI (live meter):
 """
 
 import queue
+import shutil
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +32,13 @@ import sinad as _sinad  # noqa: E402  (sinad_meter's; returns radio-definition S
 
 CLIP_LEVEL = 0.99
 UNDER_RANGE_PEAK = 0.003  # below this the window is probably silence/cable trouble
+
+
+def status_line(text):
+    """Rewrite one live status line in place. Trimmed to the terminal's
+    width: a line that wraps can't be rewound with \\r, so it would scroll."""
+    width = max(20, shutil.get_terminal_size((80, 20)).columns - 1)
+    print("\r" + text[:width].ljust(width), end="", flush=True)
 
 
 def make_bandpass(fs, hpf_hz=200.0, lpf_hz=3000.0):
@@ -55,10 +64,81 @@ class Reading:
     under_range: bool    # capture suspiciously quiet throughout
 
 
-class SinadAnalyzer:
-    """Continuous capture; read() returns a robust SINAD over avg_s."""
+class AudioRing:
+    """Thread-safe FIFO of samples between an input callback and an output
+    callback running on different clocks. Keeps at most max_s of backlog
+    (dropping the oldest), and pads with silence when it runs dry."""
 
-    def __init__(self, device, fs=48000, window_s=0.25, hpf_hz=200.0, lpf_hz=3000.0):
+    def __init__(self, fs, max_s=0.25):
+        self._buf = np.zeros(0, dtype=np.float32)
+        self._max = int(fs * max_s)
+        self._lock = threading.Lock()
+
+    def push(self, block):
+        with self._lock:
+            self._buf = np.concatenate([self._buf, block.astype(np.float32)])[-self._max:]
+
+    def pull(self, n):
+        with self._lock:
+            out, self._buf = self._buf[:n], self._buf[n:]
+        return np.pad(out, (0, n - len(out)))
+
+
+class Monitor:
+    """Plays the captured audio on another output (e.g. the computer's
+    speakers), so you can listen while measuring."""
+
+    def __init__(self, device, fs=48000, gain=1.0):
+        self.gain = gain
+        self._ring = AudioRing(fs)
+        self._stream = sounddevice.OutputStream(samplerate=fs, device=device, channels=1,
+                                                callback=self._callback)
+
+    def _callback(self, outdata, frames, _time, _status):
+        outdata[:, 0] = self._ring.pull(frames) * self.gain
+
+    def feed(self, block):
+        self._ring.push(block)
+
+    def start(self):
+        self._stream.start()
+
+    def stop(self):
+        self._stream.stop()
+        self._stream.close()
+
+
+def pick_monitor(spec, input_idx):
+    """Output device for --monitor. 'default' means the computer's own
+    output: the system default, unless that's the adapter itself (macOS
+    often switches to a newly plugged USB adapter), in which case the
+    first other output."""
+    if spec not in (None, "default"):
+        spec = str(spec)
+        if spec.isdigit():
+            return int(spec)
+        for idx, name, _, n_out, _ in list_devices():
+            if n_out and spec.lower() in name.lower():
+                return idx
+        raise LookupError(f"no output device matching {spec!r}")
+    adapter = sounddevice.query_devices(input_idx)["name"]
+    default_out = sounddevice.default.device[1]
+    if default_out is not None and default_out >= 0 \
+            and sounddevice.query_devices(default_out)["name"] != adapter:
+        return default_out
+    for idx, name, _, n_out, _ in list_devices():
+        if n_out and name != adapter:
+            return idx
+    raise LookupError("no output device other than the adapter to monitor on")
+
+
+class SinadAnalyzer:
+    """Continuous capture; read() returns a robust SINAD over avg_s.
+    With monitor=<output device>, the captured audio is also played there."""
+
+    def __init__(self, device, fs=48000, window_s=0.25, hpf_hz=200.0, lpf_hz=3000.0,
+                 monitor=None, monitor_gain=1.0):
+        self.monitor = Monitor(monitor, fs, monitor_gain) if monitor is not None else None
         self.fs = fs
         self.window = round(fs * window_s)
         self._bpf = make_bandpass(fs, hpf_hz, lpf_hz)
@@ -71,15 +151,22 @@ class SinadAnalyzer:
     def _callback(self, indata, _frames, _time, status):
         # PortAudio thread; a callback stream keeps the device drained,
         # which is what prevents overflows while the caller computes.
-        self._q.put((indata[:, 0].copy(), bool(status.input_overflow)))
+        block = indata[:, 0].copy()
+        if self.monitor is not None:
+            self.monitor.feed(block)
+        self._q.put((block, bool(status.input_overflow)))
 
     def __enter__(self):
+        if self.monitor is not None:
+            self.monitor.start()
         self._stream.start()
         return self
 
     def __exit__(self, *_):
         self._stream.stop()
         self._stream.close()
+        if self.monitor is not None:
+            self.monitor.stop()
 
     def _drain(self):
         try:
@@ -184,6 +271,10 @@ def main():
     p.add_argument("--device", help="input device index or name substring "
                    "(default: auto-detect the USB line-in adapter)")
     p.add_argument("--list-devices", action="store_true")
+    p.add_argument("--monitor", nargs="?", const="default", metavar="OUTPUT",
+                   help="also play the audio on the computer's output "
+                        "(or a named/numbered output device)")
+    p.add_argument("--monitor-gain", type=float, default=1.0)
     p.add_argument("--hpf", type=float, default=200.0)
     p.add_argument("--lpf", type=float, default=3000.0)
     p.add_argument("--avg", type=float, default=1.0, help="seconds per reading")
@@ -198,8 +289,13 @@ def main():
         return
 
     device = pick_device(args.device)
+    mon = None
+    if args.monitor:
+        mon = pick_monitor(args.monitor, device)
+        print(f"monitoring on: [{mon}] {sounddevice.query_devices(mon)['name']}")
     t_end = time.time() + args.seconds if args.seconds else None
-    with SinadAnalyzer(device, hpf_hz=args.hpf, lpf_hz=args.lpf) as an:
+    with SinadAnalyzer(device, hpf_hz=args.hpf, lpf_hz=args.lpf,
+                       monitor=mon, monitor_gain=args.monitor_gain) as an:
         try:
             while t_end is None or time.time() < t_end:
                 r = an.read(settle_s=0.0, avg_s=args.avg)

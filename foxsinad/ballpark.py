@@ -21,7 +21,7 @@ RF is always turned off at the end (with the Morse ID).
 import argparse
 import sys
 
-from .analyzer import CLIP_LEVEL, SinadAnalyzer, pick_device
+from .analyzer import CLIP_LEVEL, SinadAnalyzer, pick_device, pick_monitor, status_line
 from .picofox import PicoFox, PicoFoxError
 from .sweep import CalTable, DEFAULT_CAL, read_clean
 
@@ -53,13 +53,18 @@ def main():
     p.add_argument("--dev", type=int, default=3000)
     p.add_argument("--device", help="audio input (default: auto-detect the USB adapter)")
     p.add_argument("--port", help="PicoFox serial port (default: auto)")
+    p.add_argument("--monitor", nargs="?", const="default", metavar="OUTPUT",
+                   help="also play the radio's audio on the computer's output")
+    p.add_argument("--monitor-gain", type=float, default=1.0)
     args = p.parse_args()
 
     cal = CalTable(DEFAULT_CAL)
     last = None
     try:
         dev = pick_device(args.device)
-        with PicoFox(args.port) as fox, SinadAnalyzer(dev) as an:
+        mon = pick_monitor(args.monitor, dev) if args.monitor else None
+        with PicoFox(args.port) as fox, SinadAnalyzer(dev, monitor=mon,
+                                                      monitor_gain=args.monitor_gain) as an:
             print("PicoFox:", fox.hello())
             fox.set_call(args.call)
             fox.set_freq(args.freq)
@@ -74,7 +79,7 @@ def main():
                 while True:
                     r = read_clean(fox, an, settle_s=0.0, avg_s=1.0)
                     last = r
-                    print(f"\rSINAD {r.sinad_db:5.1f} dB   {hint(r):<70}", end="", flush=True)
+                    status_line(f"SINAD {r.sinad_db:5.1f} dB  {hint(r)}")
             except KeyboardInterrupt:
                 print("\nturning RF off ...")
             finally:

@@ -16,8 +16,8 @@ import sys
 import numpy as np
 import sounddevice
 
-from .analyzer import CLIP_LEVEL, UNDER_RANGE_PEAK, list_devices, make_bandpass, \
-    output_twin, pick_device, sinad_db
+from .analyzer import CLIP_LEVEL, UNDER_RANGE_PEAK, Monitor, list_devices, make_bandpass, \
+    output_twin, pick_device, pick_monitor, sinad_db, status_line
 
 FS = 48000
 
@@ -55,22 +55,33 @@ def cmd_devices(_args):
 
 def cmd_level(args):
     dev = pick_device(args.device)
+    mon = None
+    if args.monitor:
+        out = pick_monitor(args.monitor, dev)
+        mon = Monitor(out, FS, args.monitor_gain)
+        print(f"monitoring on: [{out}] {sounddevice.query_devices(out)['name']}")
     print("Live input level. Aim for peaks between -20 and -6 dBFS with the test tone on.\n"
           "Ctrl-C to stop.\n")
-    block = FS // 4
+    block = FS // 8
     try:
+        if mon:
+            mon.start()
         with sounddevice.InputStream(samplerate=FS, device=dev, channels=1) as s:
             while True:
-                x, overflow = s.read(block)
+                x, _overflow = s.read(block)
                 x = x[:, 0]
+                if mon:
+                    mon.feed(x)
                 pk, rms = dbfs(np.abs(x).max()), dbfs(np.sqrt(np.mean(x ** 2)))
-                bar = "#" * max(0, int((pk + 60) / 2))
-                flag = "  CLIPPING - turn the radio down" if pk > dbfs(CLIP_LEVEL) else \
-                       "  too quiet" if pk < -40 else ""
-                print(f"\rpeak {pk:6.1f} dBFS  rms {rms:6.1f}  |{bar:<30}|{flag:<34}",
-                      end="", flush=True)
+                bar = "#" * max(0, min(20, int((pk + 60) / 3)))
+                flag = " CLIPPING: volume down" if pk > dbfs(CLIP_LEVEL) else \
+                       " too quiet" if pk < -40 else ""
+                status_line(f"peak {pk:6.1f} dBFS  rms {rms:6.1f} |{bar:<20}|{flag}")
     except KeyboardInterrupt:
         print()
+    finally:
+        if mon:
+            mon.stop()
 
 
 def cmd_loopback(args):
@@ -98,6 +109,9 @@ def cmd_loopback(args):
 def main():
     p = argparse.ArgumentParser(description="Audio bring-up checks for the SINAD analyzer.")
     p.add_argument("--device", help="audio device index or name (default: auto-detect)")
+    p.add_argument("--monitor", nargs="?", const="default", metavar="OUTPUT",
+                   help="level: also play the audio on the computer's output")
+    p.add_argument("--monitor-gain", type=float, default=1.0)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("devices", help="list audio devices")
     sub.add_parser("level", help="live input level meter")

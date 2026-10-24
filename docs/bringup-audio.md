@@ -58,6 +58,13 @@ $PY -m foxsinad.picofox --call KM6AM --freq 145.55 --att 0 --tone 1000 3000
 $PY -m foxsinad.audiocheck level
 ```
 
+To hear the radio on the computer's speakers at the same time, add
+`--monitor` (for `audiocheck` it goes before the command:
+`audiocheck --monitor level`). It works in `ballpark`, `sweep` and the live
+`analyzer` too, and helps when finding the 12 dB point by ear. Give an
+output's name or number to monitor somewhere else, e.g.
+`--monitor "MacBook Pro Speakers"`.
+
 Adjust the radio's volume until the peaks sit between **−20 and −6 dBFS**,
 then leave the volume alone for the rest of the session. Ctrl-C the
 level meter, then watch the live SINAD:

@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .analyzer import CLIP_LEVEL, SinadAnalyzer, pick_device
+from .analyzer import CLIP_LEVEL, SinadAnalyzer, pick_device, pick_monitor
 from .picofox import PicoFox, PicoFoxError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,13 +110,14 @@ def run(args):
         print(f"warning: the cal table was measured at {cal.freq_mhz} MHz, "
               f"you're sweeping at {args.freq} MHz")
     dev = pick_device(args.device)
+    mon = pick_monitor(args.monitor, dev) if getattr(args, "monitor", None) else None
     RUNS.mkdir(exist_ok=True)
     label = args.label or f"foxsinad_{args.condition}_{args.freq:g}MHz"
     stamp = datetime.now()
     path = RUNS / f"run_{label}_{stamp.strftime('%Y-%m-%d_%H%M%S')}.csv"
 
     rows = []
-    with PicoFox(args.port) as fox, SinadAnalyzer(dev) as an:
+    with PicoFox(args.port) as fox, SinadAnalyzer(dev, monitor=mon) as an:
         print("PicoFox:", fox.hello())
         fox.set_call(args.call)
         fox.set_freq(args.freq)
@@ -249,6 +250,8 @@ def main():
     p.add_argument("--device", help="audio input (default: auto-detect the USB adapter)")
     p.add_argument("--port", help="PicoFox serial port (default: auto)")
     p.add_argument("--cal", default=str(DEFAULT_CAL))
+    p.add_argument("--monitor", nargs="?", const="default", metavar="OUTPUT",
+                   help="also play the radio's audio on the computer's output")
     args = p.parse_args()
     try:
         run(args)
