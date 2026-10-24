@@ -160,10 +160,45 @@ def sa_setup(hp, freq_mhz):
     time.sleep(1.0)
 
 
-def sa_peak_dbm(hp, reads=3):
-    hp.scpi("SAN:MARK:PEAK")  # manual's own example spelling (p319)
-    level, _ = hp.scpiq_float("MEAS:SAN:MARK:LEV?", n=reads, settle_s=0.3)
-    return level
+def _as_mhz(value):
+    """Marker frequency in MHz. The manual doesn't state the query's units;
+    in the 2 m band Hz, kHz and MHz readings can't be confused."""
+    if value > 1e7:
+        return value / 1e6
+    if value > 1e4:
+        return value / 1e3
+    return value
+
+
+def sa_peak_dbm(hp, expect_mhz, tol_khz=5.0, agree_db=0.2,
+                sweep_wait_s=0.7, max_tries=15):
+    """Peak level of the carrier at expect_mhz, verified rather than trusted.
+
+    A peak search only looks at the trace as it stands. Just after a
+    re-center or RF-on, the trace can still be the old one (seen on
+    hardware 2026-10-23: marker parked off the carrier, read -35.79 dBm
+    while the screen showed +12). So: wait, peak-search, check that the
+    marker frequency is on the carrier, and only accept a level once two
+    consecutive on-carrier reads agree.
+    """
+    last = None
+    seen = []
+    for _ in range(max_tries):
+        time.sleep(sweep_wait_s)
+        hp.scpi("SAN:MARK:PEAK")  # manual's own example spelling (p319)
+        mhz = _as_mhz(float(hp.scpiq("MEAS:SAN:MARK:FREQ?")))
+        level = float(hp.scpiq("MEAS:SAN:MARK:LEV?"))
+        seen.append((round(mhz, 5), round(level, 2)))
+        if abs(mhz - expect_mhz) * 1e3 > tol_khz:
+            last = None
+            continue
+        if last is not None and abs(level - last) <= agree_db:
+            return (level + last) / 2
+        last = level
+    raise Hp8935Error(
+        f"SA marker never settled on the carrier at {expect_mhz} MHz "
+        f"(+/-{tol_khz} kHz) with two reads within {agree_db} dB; "
+        f"(MHz, dBm) seen: {seen}")
 
 
 def afan_setup(hp, filt2, sel, filt1="300Hz HPF"):
@@ -220,7 +255,7 @@ def t1_cal(hp, fox, args):
     for att in atts:
         fox.set_att(att)
         time.sleep(args.settle)
-        dbm = sa_peak_dbm(hp) + args.cable_loss_db
+        dbm = sa_peak_dbm(hp, f) + args.cable_loss_db
         rows.append((att, att * 0.25, round(dbm, 2)))
         print(f"ATT {att:3d} (-{att*0.25:5.2f} dB) -> {dbm:7.2f} dBm")
     fox.off()
@@ -250,7 +285,7 @@ def t2_flatness(hp, fox, args):
             fox.set_att(att)
             fox.carrier()
             time.sleep(args.settle)
-            dbm = sa_peak_dbm(hp) + args.cable_loss_db
+            dbm = sa_peak_dbm(hp, f) + args.cable_loss_db
             rows.append((f, att, round(dbm, 2)))
             print(f"{f:.2f} MHz ATT {att:3d} -> {dbm:7.2f} dBm")
     fox.off()
@@ -332,7 +367,7 @@ def t5_sinad_vs_power(hp, fox, args):
         time.sleep(args.settle)
         hp.scpi("DISP SAN")
         time.sleep(0.5)
-        dbm = sa_peak_dbm(hp) + args.cable_loss_db
+        dbm = sa_peak_dbm(hp, f) + args.cable_loss_db
         afan_setup(hp, filt2="3kHz LPF", sel="SINAD")
         sinad, sd = hp.scpiq_float("MEAS:AFR:SINAD?", n=8, settle_s=0.25)
         rows.append((att, round(dbm, 2), round(sinad, 2), round(sd, 2)))
@@ -352,7 +387,7 @@ def t6_warmup(hp, fox, args):
     rows = []
     t0 = time.time()
     while time.time() - t0 < 20 * 60:
-        dbm = sa_peak_dbm(hp) + args.cable_loss_db
+        dbm = sa_peak_dbm(hp, f) + args.cable_loss_db
         t = round(time.time() - t0, 1)
         rows.append((t, round(dbm, 2)))
         print(f"t={t:6.0f}s  {dbm:7.2f} dBm", flush=True)
