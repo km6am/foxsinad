@@ -109,6 +109,11 @@ def cmd_loopback(args):
 
 def main():
     p = argparse.ArgumentParser(description="Audio bring-up checks for the SINAD analyzer.")
+    # Also accepted before the command ("audiocheck --monitor level"). Separate
+    # dests, because a subcommand's defaults would overwrite same-named ones.
+    p.add_argument("--monitor", dest="monitor_pre", action="store_true",
+                   help="(level) also play the audio on the computer's speakers")
+    p.add_argument("--device", dest="device_pre", help=argparse.SUPPRESS)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--device", help="audio input, index or name (default: auto-detect)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -124,6 +129,9 @@ def main():
     lb.add_argument("--seconds", type=float, default=3.0)
     lb.add_argument("--level-dbfs", type=float, default=-12.0)
     args = p.parse_args()
+    args.device = args.device or args.device_pre
+    if args.cmd == "level":
+        args.monitor = args.monitor or args.monitor_pre
     try:
         {"devices": cmd_devices, "level": cmd_level, "loopback": cmd_loopback}[args.cmd](args)
     except LookupError as e:
