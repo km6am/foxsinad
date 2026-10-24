@@ -33,6 +33,9 @@ built-in microphone: macOS voice processing removes test tones from it.
 ## 2. The analyzer's own floor (loopback)
 
 Connect the UFO202's line **OUT** to its line **IN** with the RCA cable.
+No RCA cable? Use the radio cable instead: its 3.5 mm plug into the
+UFO202's **headphone** jack (knob near the middle), and its white RCA
+into line **IN**. The test plays on the left channel only.
 
 ```bash
 $PY -m foxsinad.audiocheck loopback
@@ -158,7 +161,11 @@ SINAD readings on the same audio at a few levels.
 
 ## Status
 
-- Written and checked only against a simulated radio
+- **Measured 2026-10-24, loopback** (UFO202 headphone jack into its line
+  in): **78.5 dB SINAD** (sd 0.31 dB, peaks −20 dBFS). The adapter's
+  output stage is in that path too, so the input alone is at least that
+  good. With the input open it sits at −86 dBFS rms.
+- The radio steps (3–7) were written and checked only against a simulated radio
   (`tests/test_sweep.py`: it finds a simulated −118.0 dBm point at
   −117.9).
 - Nothing in this chain has run on real audio hardware yet.
