@@ -85,7 +85,7 @@ $PY -m foxsinad.cal8935 t1-cal
 
 ## T2 — flatness vs frequency
 
-Carrier at ATT 0 and ATT 64 on 144.10 / 145.55 / 146.50 / 147.90 MHz
+Carrier at ATT 0, 64 and 127 (maximum) on 144.10 / 145.55 / 146.50 / 147.90 MHz
 (SA re-centered each time, same marker read).
 
 ```bash

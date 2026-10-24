@@ -281,7 +281,7 @@ def t2_flatness(hp, fox, args):
     for f in (144.10, 145.55, 146.50, 147.90):
         sa_setup(hp, f)
         fox.set_freq(f)
-        for att in (0, 64):
+        for att in (0, 64, 127):
             fox.set_att(att)
             fox.carrier()
             time.sleep(args.settle)
