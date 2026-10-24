@@ -393,7 +393,7 @@ def t3b_deviation_corrected(hp, fox, args):
         meas, sd = hp.scpiq_float("MEAS:AFR:FM?", n=5, settle_s=0.3)
         rows.append((hz, round(zoh, 4), cmd, round(meas, 1), round(sd, 1)))
         print(f"tone {hz:4d} Hz  zoh {zoh:.3f}  cmd {cmd:5d} Hz -> "
-              f"measured {meas:7.1f} Hz ({meas/target:+.1%} vs target)")
+              f"measured {meas:7.1f} Hz ({meas/target - 1:+.1%} vs target)")
     fox.off()
     fox.set_att(127)
     _writerows("t3b_deviation_corrected",
