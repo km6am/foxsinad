@@ -274,18 +274,21 @@ def t3_deviation(hp, fox, args):
     for dev in range(1000, 10001, 1000):
         fox.tone(1000, dev)
         time.sleep(args.settle)
-        khz, sd = hp.scpiq_float("MEAS:AFR:FM?", n=5, settle_s=0.3)
-        rows.append(("linearity", 1000, dev, round(khz * 1000, 1), round(sd * 1000, 1)))
-        print(f"dev {dev:5d} Hz -> measured {khz*1000:7.1f} Hz (sd {sd*1000:.1f})")
+        # MEAS:AFR:FM? returns Hz (verified on hardware 2026-10-23: the
+        # 300 Hz-tone reading matched the 0.951x sampled-peak prediction
+        # only in Hz), despite the screen field being labeled in kHz.
+        hz_meas, sd = hp.scpiq_float("MEAS:AFR:FM?", n=5, settle_s=0.3)
+        rows.append(("linearity", 1000, dev, round(hz_meas, 1), round(sd, 1)))
+        print(f"dev {dev:5d} Hz -> measured {hz_meas:7.1f} Hz (sd {sd:.1f})")
 
     print("Part B: audio flatness at 3 kHz deviation")
     for hz in (300, 500, 800, 1000, 1500, 2000, 2400):
         fox.tone(hz, 3000)
         time.sleep(args.settle)
-        khz, sd = hp.scpiq_float("MEAS:AFR:FM?", n=5, settle_s=0.3)
+        hz_meas, sd = hp.scpiq_float("MEAS:AFR:FM?", n=5, settle_s=0.3)
         afr = hp.scpiq("MEAS:AFR:FREQ?")
-        rows.append(("flatness", hz, 3000, round(khz * 1000, 1), round(sd * 1000, 1)))
-        print(f"tone {hz:4d} Hz -> dev {khz*1000:7.1f} Hz (sd {sd*1000:.1f}) afr {afr}")
+        rows.append(("flatness", hz, 3000, round(hz_meas, 1), round(sd, 1)))
+        print(f"tone {hz:4d} Hz -> dev {hz_meas:7.1f} Hz (sd {sd:.1f}) afr {afr}")
     fox.off()
     fox.set_att(127)
     _writerows("t3_deviation",
