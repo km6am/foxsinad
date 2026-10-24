@@ -161,7 +161,7 @@ def sa_setup(hp, freq_mhz):
 
 
 def sa_peak_dbm(hp, reads=3):
-    hp.scpi("SAN:MARK:PPE")
+    hp.scpi("SAN:MARK:PEAK")  # manual's own example spelling (p319)
     level, _ = hp.scpiq_float("MEAS:SAN:MARK:LEV?", n=reads, settle_s=0.3)
     return level
 
@@ -202,7 +202,17 @@ def t1_cal(hp, fox, args):
     fox.set_att(0)
     fox.carrier()
     time.sleep(1.0)
-    txpow = hp.scpiq("MEAS:RFR:POW?")
+    # Absolute cross-check against the TX power meter (reads the RF
+    # ANALYZER screen's TX Power field, so tune the analyzer first).
+    # Non-fatal: at +18 dBm-cable the power meter is near its floor and
+    # may read invalid.
+    try:
+        hp.scpi(f"RFAN:FREQ {f} MHZ")
+        hp.scpi("RFAN:INP 'RF In'")
+        time.sleep(1.0)
+        txpow = hp.scpiq("MEAS:RFR:POW?") or "(blank)"
+    except Hp8935Error as e:
+        txpow = f"unavailable ({e})"
     print(f"ATT 0 TX-power-meter cross-check: {txpow} (compare SA row below)")
 
     rows = []
