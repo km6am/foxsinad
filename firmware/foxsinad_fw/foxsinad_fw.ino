@@ -51,19 +51,8 @@ Library: Etherkit Si5351.
 #define SAMPLE_WRITE_CORR_US -3
 #define MAX_UINT32 4294967295UL
 
-#ifdef FOXSINAD_BENCH_WIDE
-// Bench-only build (./build.sh wide) for characterizing the output
-// filters into a test set; never for on-air use. The top is 150 MHz
-// because the carrier is the PLL / 6: 6 x 150 = 900 MHz is the Si5351
-// VCO ceiling, and the library also switches to divide-by-4 at 150 MHz.
-#define MIN_FREQ_MHZ 129.9
-#define MAX_FREQ_MHZ 150.0
-#define BUILD_TAG " WIDE"
-#else
 #define MIN_FREQ_MHZ 144.0
 #define MAX_FREQ_MHZ 148.0
-#define BUILD_TAG ""
-#endif
 #define MAX_DEVIATION_HZ 10000
 #define FREQ_MARGIN_HZ (2 * MAX_DEVIATION_HZ)
 
@@ -380,7 +369,7 @@ void handleLine(char* line) {
   Command cmd = {};
 
   if (strcmp(verb, "HELLO") == 0 || strcmp(verb, "VER") == 0) {
-    Serial.printf("OK FOXSINAD %s REV%u%s\r\n", FW_VERSION, revision, BUILD_TAG);
+    Serial.printf("OK FOXSINAD %s REV%u\r\n", FW_VERSION, revision);
 
   } else if (strcmp(verb, "CALL") == 0) {
     char* arg = strtok_r(nullptr, " \t", &save);
@@ -563,7 +552,7 @@ void setup() {
   cmdSeq = 1;
   ackSeq = 1;
 
-  Serial.printf("*BOOT FOXSINAD %s REV%u%s\r\n", FW_VERSION, revision, BUILD_TAG);
+  Serial.printf("*BOOT FOXSINAD %s REV%u\r\n", FW_VERSION, revision);
 }
 
 void loop() {
