@@ -606,6 +606,17 @@ def _to_hz(value, expect_hz):
     return min((value * k for k in (1.0, 1e3, 1e6)), key=lambda hz: abs(hz - expect_hz))
 
 
+def _clock_time_today(hhmm):
+    """Epoch seconds for HH:MM today (or yesterday, if that's in the future)."""
+    import datetime as dt
+    h, m = (int(x) for x in hhmm.split(":"))
+    now = dt.datetime.now()
+    t = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if t > now:
+        t -= dt.timedelta(days=1)
+    return t.timestamp()
+
+
 def t8_ref_warmup(args):
     """Frequency of an external source (e.g. a 10 MHz GPSDO) vs time after
     switch-on, counted by the 8935's RF analyzer on its internal reference.
@@ -638,8 +649,13 @@ def t8_ref_warmup(args):
         gate = hp.scpiq("RFAN:FREQ:GTIM?")
         print(f"RF analyzer tuned to {tuned/1e6:.6f} MHz; RF Cnt Gate reply: {gate}")
         print(f"(At {f:g} MHz, 1 Hz of error is {1/f:.3g} ppm.)")
-        input("\n>>> Source output to RF IN/OUT. Switch the source ON, then press Enter ... ")
-        t_on = time.time()
+        if args.started:
+            t_on = _clock_time_today(args.started)
+            print(f"\nTiming from {args.started} ({(time.time() - t_on) / 60:.1f} min ago). "
+                  "Source must already be on RF IN/OUT.")
+        else:
+            input("\n>>> Source output to RF IN/OUT. Switch the source ON, then press Enter ... ")
+            t_on = time.time()
 
         end = t_on + args.minutes * 60
         try:
@@ -722,6 +738,9 @@ def main():
                    help="t7-freq-drift: PicoFox attenuator setting (default 40)")
     p.add_argument("--already-on", action="store_true",
                    help="t7-freq-drift: run even though the PicoFox is already powered")
+    p.add_argument("--started", metavar="HH:MM",
+                   help="t8-ref-warmup: clock time the warming-up device was switched "
+                        "on (e.g. the 8935 itself); times from then, no prompt")
     p.add_argument("--ref-mhz", type=float, default=10.0,
                    help="t8-ref-warmup: source frequency, MHz (default 10)")
     p.add_argument("test", choices=sorted([*TESTS, "t7-freq-drift", "t8-ref-warmup"]))
