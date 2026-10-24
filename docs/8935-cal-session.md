@@ -21,9 +21,37 @@ Commands below assume `cd ~/foxsinad` and
    this cable."
 2. **PicoFox**: USB to the Mac, power switch on, foxsinad_fw flashed
    (it is, from the smoke test). It boots RF-off at max attenuation.
-3. **8935**: your normal SINADCTL startup per hp8935_sinad_serial's
-   OPERATING.md (load/run SINADCTL, Serial In → IBASIC). The script
-   starts every run with `PING` and refuses to continue without a reply.
+3. **8935 startup (from cold to answering)** — condensed from
+   hp8935_sinad_serial's OPERATING.md §§3–5, which is the full story:
+   1. Power on. Check **I/O CONFIGURE**: Serial In **Inst**, IBASIC Echo
+      **On**, **9600 8-N-1**, Rcv/Xmt Pace **None**. (These survive power
+      cycles, so usually already right — *except* Serial In, which a
+      killed SINADCTL session leaves on `IBASIC`; see step 5.)
+   2. **Software Menu → TESTS (IBASIC CONTROLLER)** and select the
+      **command bar** (highlighted strip, top left). A beep +
+      "Invalid keystroke" when typing means the bar isn't selected —
+      front-panel fix only, nothing on the bus can select it.
+   3. If SINADCTL is already in instrument memory: press the **Run**
+      softkey. Otherwise load it (~76 s):
+      ```bash
+      cd ~/Code/hp8935_sinad_serial && ~/miniconda3/envs/vnafit/bin/python load.py
+      ```
+   4. Verify from the Mac — this observes rather than assumes:
+      ```bash
+      cd ~/Code/hp8935_sinad_serial && ~/miniconda3/envs/vnafit/bin/python run.py state
+      ```
+      Wanted state: `SINADCTL running`. (`no response` = program not
+      running, wrong baud, or the Serial-In trap below. `command bar` =
+      Serial In is still `Inst`: press Run / load.)
+   5. **End every session with `QUIT`** (SINADCTL restores Serial In to
+      `Inst`). Powering off with it running leaves Serial In = `IBASIC`
+      with nothing running after reboot — the classic "perfect cable, no
+      response" trap; the only fix is front panel: I/O CONFIGURE →
+      Serial In → `Inst`, then Run/reload.
+
+   Our cal script PINGs at startup and refuses to continue without
+   `OK SINADCTL <ver>`, so a timeout here always means one of the states
+   above, not a cal-script problem.
 4. Preflight probe (checks both links, sets nothing):
    ```bash
    $PY -m foxsinad.cal8935 probe
