@@ -11,3 +11,8 @@ __pycache__/
 # firmware build artifacts
 firmware/build/
 *.uf2
+
+# cal data IS tracked (load-bearing, small) despite the global patterns
+!cal/*.csv
+!cal/*.json
+!cal/*.png
