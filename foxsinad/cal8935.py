@@ -362,11 +362,50 @@ def t6_warmup(hp, fox, args):
     _writerows("t6_warmup", ("t_s", "dbm"), rows)
 
 
+def t3b_deviation_corrected(hp, fox, args):
+    """Part B repeated with ZOH pre-compensation, measured through the
+    3 kHz LPF so the reading is the tone component, not staircase edges.
+
+    The firmware's 5 kS/s zero-order hold scales the tone component by
+    sinc(f/5000); command dev = target/sinc so the delivered tone-component
+    deviation is the target at every tone frequency. Prediction: flat
+    3000 Hz for tones up to ~1500 Hz. Above that, the first sampling
+    image (5000-f) falls inside the 3 kHz measurement filter (3000 Hz at
+    f=2000, 2600 Hz at f=2400) and beats with the tone, so the peak
+    detector should read high again there - if it does, that is the
+    image, not the modulator.
+    """
+    import math
+
+    f = args.freq
+    target = 3000.0
+    fox.set_freq(f)
+    fox.set_att(40)
+    hp.scpi(f"RFAN:FREQ {f} MHZ")
+    afan_setup(hp, filt2="3kHz LPF", sel="AF Freq")
+
+    rows = []
+    for hz in (300, 500, 800, 1000, 1500, 2000, 2400):
+        zoh = math.sin(math.pi * hz / 5000) / (math.pi * hz / 5000)
+        cmd = round(target / zoh)
+        fox.tone(hz, cmd)
+        time.sleep(args.settle)
+        meas, sd = hp.scpiq_float("MEAS:AFR:FM?", n=5, settle_s=0.3)
+        rows.append((hz, round(zoh, 4), cmd, round(meas, 1), round(sd, 1)))
+        print(f"tone {hz:4d} Hz  zoh {zoh:.3f}  cmd {cmd:5d} Hz -> "
+              f"measured {meas:7.1f} Hz ({meas/target:+.1%} vs target)")
+    fox.off()
+    fox.set_att(127)
+    _writerows("t3b_deviation_corrected",
+               ("tone_hz", "zoh_gain", "dev_cmd_hz", "dev_meas_hz", "sd_hz"), rows)
+
+
 TESTS = {
     "probe": t_probe,
     "t1-cal": t1_cal,
     "t2-flatness": t2_flatness,
     "t3-deviation": t3_deviation,
+    "t3b-deviation-corrected": t3b_deviation_corrected,
     "t4-ceiling": t4_ceiling,
     "t5-sinad-vs-power": t5_sinad_vs_power,
     "t6-warmup": t6_warmup,
