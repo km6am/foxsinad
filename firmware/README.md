@@ -1,5 +1,10 @@
 # foxsinad_fw — serial-controlled test firmware for the PicoFox r3
 
+> **Superseded:** the maintained firmware, with full API docs, theory, a
+> flashing tool and a host driver, is now the standalone repo
+> `~/foxsinad-firmware` (v0.2.0, prepared for public release). This copy
+> is the 0.1.0 pre-release kept for history. Make changes there.
+
 A stateless fork of [PicoFox-Firmware](https://github.com/ai6ym/PicoFox)
 (CC BY-NC-SA 4.0, see [LICENSE](LICENSE)): no flash filesystem, no USB
 mass storage, no `settings.txt` — every parameter arrives over USB
