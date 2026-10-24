@@ -97,6 +97,20 @@ PicoFox or its USB cable, or leaking through the radio's case. Move them
 apart, shield the PicoFox, or both, until it stays at the bottom.
 Otherwise every sweep will read optimistically.
 
+### Cable arrangement matters more than anything else
+
+*Measured 2026-10-24 (UV-K5, session `uvk5_cabletouch`):* moving the audio
+cable, the radio or the PicoFox changed the 12 dB SINAD point by 2–7 dB
+per move, a 9.6 dB spread over four runs. Once the cabling was tidied and
+left alone, five runs agreed within **0.10 dB**. Inferred cause: the audio
+cable to the USB adapter and laptop carries noise into the radio, and
+signal can leak around the attenuators, both depending on placement.
+- Fix the arrangement before measuring, and don't touch it during a
+  session.
+- Re-run the leak test (step 4) after any change to the layout.
+- A result *better* than an independent reference is the warning sign of
+  leakage.
+
 ## 5. Set the step attenuator (ballpark)
 
 The PicoFox's attenuator covers only about 32 dB, from +12 to −20 dBm. A
