@@ -126,14 +126,16 @@ accuracy, and the cable losses, go straight into every level it reports.
 Run the command `ballpark` printed, for example:
 
 ```bash
-$PY -m foxsinad.sweep --pad-db 108.5 --label TIDH3_bench
+$PY -m foxsinad.sweep --pad-db 119 --radio uvk5 --condition bench
 ```
 
 **What the sweep does:**
 1. A sanity reading at full level. It stops early, saying what to fix, if
    the audio clips, there's no audio, or the reading is already below
    12 dB.
-2. A coarse pass in 2 dB steps until SINAD is clearly below 12 dB.
+2. A coarse pass in 2 dB steps, from full level down into the tail, until
+   SINAD is at the noise (below 3 dB twice; `--tail-db` changes that) or
+   the attenuator runs out.
 3. A fine pass in 0.25 dB steps across the crossing.
 4. A straight-line fit through the fine points near 12 dB gives the
    **12 dB SINAD level at the radio**.
@@ -142,9 +144,16 @@ $PY -m foxsinad.sweep --pad-db 108.5 --label TIDH3_bench
 - Readings that overlap a Morse ID are discarded and repeated.
 - The tone is turned off at the end.
 
-**Output** goes to `runs/`: a CSV in the same format as the
-hp8935_sinad_serial runs (plus `att` and `n_discarded` columns), and a
-plot.
+**Output** goes to `runs/`, named and formatted as hp8935_sinad_serial's
+`run.py` does it:
+- `run_<radio>_<condition>_<freq>MHz.csv`, or with `--session NAME`,
+  `runs/NAME/<radio>_<condition>_<freq>MHz.csv`
+- a repeat gets `_2`, `_3`, never overwriting
+- the header includes the 12 dB result (`sinad12_dbm`, `sinad12_uv`,
+  `sinad12_sigma_db`, `sinad12_fit_points`)
+- columns are run.py's, plus `att` and `n_discarded`
+- readings stream to a `.partial.csv` while it runs, so a stopped run
+  keeps its data
 
 **Accuracy:** the level at the radio is the T1 cal-table value for each
 setting minus `--pad-db`. So it's only as good as the cal table (measured

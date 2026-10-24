@@ -108,7 +108,8 @@ def main():
               "(a rough figure; the sweep measures it properly).")
     print("\nNext:")
     print(f"  ~/miniconda3/envs/sota-rf/bin/python -m foxsinad.sweep --pad-db {pad:g} "
-          f"--label <radio>_<condition>")
+          f"--radio <radio> --condition <condition>")
+    print("  (add --session <name> to group runs in a folder, --monitor to listen)")
 
 
 if __name__ == "__main__":

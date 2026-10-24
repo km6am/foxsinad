@@ -1,7 +1,8 @@
 """12 dB SINAD sweep: the PicoFox steps its level while the sound-card
 analyzer listens to the radio under test.
 
-    python3 -m foxsinad.sweep --pad-db 100 --label TIDH3_bench
+    python3 -m foxsinad.sweep --pad-db 108.5 --radio TIDH3 --condition bench
+    python3 -m foxsinad.sweep --pad-db 108.5 --session summit1 --radio TIDH3 --condition antenna
 
 Chain:
     PicoFox SMA -> fixed attenuators (--pad-db in total, cables included)
@@ -15,9 +16,13 @@ Levels at the radio come from the PicoFox calibration table
 (cal/picofox_r3_attcal.json, measured on the 8935) minus --pad-db, so
 their accuracy is the cal table's plus however well --pad-db is known.
 
-Output (runs/, in the hp8935_sinad_serial CSV format plus att and
-n_discarded columns): one row per reading, then a plot with the
-interpolated 12 dB SINAD point.
+Output follows hp8935_sinad_serial's run.py: the file name is
+<label>_<radio>_<condition>_<freq>MHz (or <session>/<radio>_<condition>_
+<freq>MHz), _2, _3 ... rather than overwriting, and the header - written
+when the run finishes - carries radio, condition, note and the 12 dB result
+(sinad12_dbm, sinad12_uv, sinad12_sigma_db, sinad12_fit_points). Columns are
+run.py's plus att and n_discarded. Readings stream to <name>.partial.csv
+during the run, so an interrupted run keeps its data.
 """
 
 import argparse
@@ -57,28 +62,72 @@ class CalTable:
         return float(np.interp(att, self.att, self.dbm_pts))
 
 
+def slug(text):
+    """Filesystem-safe fragment of a free-text name (as run.py). '3 pole' -> '3_pole'."""
+    import re
+    return re.sub(r"[^A-Za-z0-9.-]+", "_", (text or "").strip()).strip("_")
+
+
+def freq_tag(mhz):
+    """'145.55MHz', trailing zeros trimmed (as run.py)."""
+    return f"{float(mhz):g}MHz"
+
+
+def compose_label(*parts):
+    """Join the non-empty parts into one file-name stem (as run.py)."""
+    return "_".join(p for p in (slug(x) for x in parts) if p) or "run"
+
+
+def unique_label(stem):
+    """Never overwrite a saved run: append _2, _3, ... (as run.py)."""
+    if not Path(f"{stem}.csv").exists():
+        return stem
+    n = 2
+    while Path(f"{stem}_{n}.csv").exists():
+        n += 1
+    print(f"  {Path(stem).name}.csv already exists, saving this run as {Path(stem).name}_{n}")
+    return f"{stem}_{n}"
+
+
 def dbm_to_uv(dbm):
     """Voltage across 50 ohms, microvolts (as in the hp8935 CSVs)."""
     return math.sqrt(10 ** (dbm / 10) / 1000 * 50) * 1e6
 
 
-def twelve_db_point(levels, sinads, target=TARGET_DB):
-    """Level (dBm) where SINAD crosses the target.
+def twelve_db_fit(levels, sinads, target=TARGET_DB):
+    """(level, sigma, n_points) where SINAD crosses the target, or None.
 
     A straight-line fit through the points within 4 dB of the target, if
-    there are at least 3; otherwise linear interpolation between the two
-    points either side of the first crossing from the strong end. None if
-    the data never crosses."""
+    there are at least 3; sigma is the fit's statistical uncertainty in the
+    crossing level. Otherwise linear interpolation between the two points
+    either side of the first crossing from the strong end (sigma None)."""
     pts = sorted(zip(levels, sinads), reverse=True)      # strongest first
     near = [(l, s) for l, s in pts if abs(s - target) <= 4]
     if len(near) >= 3:
-        slope, icept = np.polyfit([l for l, _ in near], [s for _, s in near], 1)
+        x = np.array([l for l, _ in near])
+        y = np.array([s for _, s in near])
+        if len(near) > 3:
+            (slope, icept), cov = np.polyfit(x, y, 1, cov=True)
+        else:                       # 3 points: no covariance estimate
+            (slope, icept), cov = np.polyfit(x, y, 1), None
         if slope > 0:
-            return float((target - icept) / slope)
+            level = (target - icept) / slope
+            sigma = None
+            if cov is not None:
+                # d(level) = -(d icept + level d slope) / slope
+                g = np.array([-level / slope, -1 / slope])
+                sigma = float(np.sqrt(g @ cov @ g))
+            return float(level), sigma, len(near)
     for (l1, s1), (l2, s2) in zip(pts, pts[1:]):
         if s1 >= target > s2:
-            return l1 + (target - s1) * (l2 - l1) / (s2 - s1)
+            return l1 + (target - s1) * (l2 - l1) / (s2 - s1), None, 2
     return None
+
+
+def twelve_db_point(levels, sinads, target=TARGET_DB):
+    """Level (dBm) where SINAD crosses the target, or None."""
+    fit = twelve_db_fit(levels, sinads, target)
+    return None if fit is None else fit[0]
 
 
 def _id_in_progress(events):
@@ -112,10 +161,24 @@ def run(args):
     dev = pick_device(args.device)
     want = getattr(args, "monitor", False) or getattr(args, "monitor_device", None)
     mon = pick_monitor(getattr(args, "monitor_device", None) or "default", dev) if want else None
+
+    # Naming as hp8935_sinad_serial's run.py: a session is a folder named after
+    # it, holding <radio>_<condition>_<freq>; otherwise <label>_<radio>_...
     RUNS.mkdir(exist_ok=True)
-    label = args.label or f"foxsinad_{args.condition}_{args.freq:g}MHz"
-    stamp = datetime.now()
-    path = RUNS / f"run_{label}_{stamp.strftime('%Y-%m-%d_%H%M%S')}.csv"
+    if args.session:
+        folder = RUNS / slug(args.session)
+        folder.mkdir(exist_ok=True)
+        stem = unique_label(str(folder / compose_label(args.radio, args.condition,
+                                                       freq_tag(args.freq))))
+    else:
+        stem = unique_label(str(RUNS / compose_label(args.label, args.radio, args.condition,
+                                                     freq_tag(args.freq))))
+    label = Path(stem).name
+    partial = Path(f"{stem}.partial.csv")
+    final = Path(f"{stem}.csv")
+    columns = ["phase", "gen_dbm", "level_dbm", "level_uv", "sinad_db", "sinad_sd", "n",
+               "time", "att", "n_discarded"]
+    started = datetime.now()
 
     rows = []
     with PicoFox(args.port) as fox, SinadAnalyzer(dev, monitor=mon) as an:
@@ -137,34 +200,21 @@ def run(args):
                 sys.exit(f"error: SINAD is only {r.sinad_db:.1f} dB at full level "
                          f"({top:.1f} dBm at the radio). Use less fixed attenuation.")
 
-            with open(path, "w", newline="") as fh:
-                for k, v in [("label", label), ("date", stamp.isoformat(timespec="seconds")),
-                             ("mode", "foxsinad sweep"), ("source", "PicoFox r3 via USB"),
-                             ("instrument", "sound-card SINAD (foxsinad.analyzer)"),
-                             ("freq_mhz", args.freq), ("offset_db", -args.pad_db),
-                             ("dev_khz", args.dev / 1000), ("tone_hz", args.tone),
-                             ("settle_s", args.settle), ("avg_coarse_s", args.avg_coarse),
-                             ("avg_fine_s", args.avg_fine), ("condition", args.condition),
-                             ("note", args.note), ("station_call", args.call),
-                             ("af_input", f"audio device {dev}"),
-                             ("af_filter", "200-3000 Hz bandpass"),
-                             ("cal_table", f"{cal.path.name} ({cal.date}, {cal.freq_mhz} MHz)")]:
-                    fh.write(f"# {k}: {v}\n")
+            with open(partial, "w", newline="") as fh:
                 w = csv.writer(fh)
-                w.writerow(["phase", "gen_dbm", "level_dbm", "level_uv", "sinad_db",
-                            "sinad_sd", "n", "time", "att", "n_discarded"])
+                w.writerow(columns)
 
                 def measure(phase, att, avg):
                     fox.set_att(att)
                     r = read_clean(fox, an, args.settle, avg)
                     gen = cal.dbm(att)
                     lvl = gen - args.pad_db
-                    row = dict(phase=phase, att=att, level_dbm=lvl, sinad_db=r.sinad_db)
-                    rows.append(row)
-                    w.writerow([phase, round(gen, 2), round(lvl, 2), round(dbm_to_uv(lvl), 4),
-                                round(r.sinad_db, 2), round(r.std_db, 3), r.n,
-                                datetime.now().isoformat(timespec="milliseconds"),
-                                att, r.n_discarded])
+                    row = [phase, round(gen, 2), round(lvl, 2), round(dbm_to_uv(lvl), 4),
+                           round(r.sinad_db, 2), round(r.std_db, 3), r.n,
+                           datetime.now().isoformat(timespec="milliseconds"),
+                           att, r.n_discarded]
+                    rows.append(dict(zip(columns, row)))
+                    w.writerow(row)
                     fh.flush()
                     flags = (" CLIP" if r.peak >= CLIP_LEVEL else "") + \
                             (f" ({r.n_discarded} windows discarded)" if r.n_discarded else "")
@@ -172,11 +222,12 @@ def run(args):
                           f"(sd {r.std_db:.2f}){flags}", flush=True)
                     return r.sinad_db
 
-                # coarse: 2 dB steps until clearly below the target
+                # coarse: 2 dB steps on down into the tail, until SINAD is at
+                # the noise (below --tail-db twice running) or ATT runs out
                 weak = 0
                 for att in list(range(0, 128, 8)) + [127]:
                     s = measure("coarse", att, args.avg_coarse)
-                    weak = weak + 1 if s < TARGET_DB - 3 else 0
+                    weak = weak + 1 if s < args.tail_db else 0
                     if weak >= 2:
                         break
                 coarse = [r for r in rows if r["phase"] == "coarse"]
@@ -185,7 +236,8 @@ def run(args):
                 if not below:
                     sys.exit(f"SINAD is still above {TARGET_DB:g} dB at ATT 127 "
                              f"({cal.dbm(127) - args.pad_db:.1f} dBm at the radio). "
-                             "Add more fixed attenuation and run again.")
+                             "Add more fixed attenuation and run again. "
+                             f"(Readings so far: {partial})")
                 b = min(below)
                 stronger = [x for x in above if x < b]
                 a = max(stronger) if stronger else 0
@@ -198,13 +250,44 @@ def run(args):
             fox.set_att(127)
 
     fine = [r for r in rows if r["phase"] == "fine"]
-    point = twelve_db_point([r["level_dbm"] for r in fine], [r["sinad_db"] for r in fine])
-    print(f"\nwrote {path}")
+    fit = twelve_db_fit([r["level_dbm"] for r in fine], [r["sinad_db"] for r in fine])
+    point, sigma, npts = fit if fit else (None, None, None)
+
+    # The header goes in once the result is known, as run.py does.
+    meta = dict(
+        label=label, date=started.isoformat(timespec="seconds"), mode="foxsinad sweep",
+        source="PicoFox r3 via USB", instrument="sound-card SINAD (foxsinad.analyzer)",
+        freq_mhz=args.freq, offset_db=-args.pad_db, dev_khz=args.dev / 1000,
+        tone_hz=args.tone, avg_s=args.avg_fine, avg_coarse_s=args.avg_coarse,
+        settle_s=args.settle, radio=args.radio or "(none)",
+        condition=args.condition or "(none)", note=args.note,
+        station_call=(args.call or "").upper() or "(not set)",
+        session=args.session or "(none)",
+        af_input=f"audio device {dev}", af_filter1="200Hz HPF (software)",
+        af_filter2="3kHz LPF (software)", af_deemphasis="(radio's own)",
+        af_detector="SINAD from FFT residual (sinad_meter)",
+        cal_table=f"{cal.path.name} ({cal.date}, {cal.freq_mhz} MHz)",
+        sinad12_dbm=None if point is None else round(point, 2),
+        sinad12_uv=None if point is None else round(dbm_to_uv(point), 4),
+        sinad12_sigma_db=None if sigma is None else round(sigma, 3),
+        sinad12_fit_points=npts)
+    with open(final, "w", newline="") as fh:
+        for k, v in meta.items():
+            fh.write(f"# {k}: {v}\n")
+        fh.write(partial.read_text())
+    partial.unlink()
+
+    print(f"\nSaved {final}")
     if point is None:
         print("No clean 12 dB crossing in the fine sweep; see the CSV.")
     else:
-        print(f"12 dB SINAD: {point:.1f} dBm at the radio ({dbm_to_uv(point):.3f} uV, 50 ohm)")
-    plot(path, rows, point)
+        pm = "" if sigma is None else f" +/- {sigma:.2f}"
+        print(f"  => {TARGET_DB:g} dB SINAD at {point:.2f} dBm{pm}   "
+              f"({dbm_to_uv(point):.3f} uV) at the radio input")
+        if sigma is not None:
+            print(f"     +/- is the fit's statistical uncertainty ({npts} points); it "
+                  "excludes the cal table and --pad-db.")
+    plot(final, rows, point)
     return point
 
 
@@ -238,14 +321,20 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--pad-db", type=float, required=True,
                    help="total fixed attenuation between the PicoFox and the radio, dB")
-    p.add_argument("--label", help="name for the run (used in the file name)")
-    p.add_argument("--condition", default="bench", help="e.g. bench, antenna, summit")
-    p.add_argument("--note", default="")
+    p.add_argument("--label", default="run", help="run prefix (default 'run', as run.py)")
+    p.add_argument("--session", help="session name: runs go in runs/<session>/, "
+                   "named <radio>_<condition>_<freq>")
+    p.add_argument("--radio", default="", help="radio name; goes in the file name")
+    p.add_argument("--condition", default="", help="e.g. bench, antenna, summit; "
+                   "goes in the file name")
+    p.add_argument("--note", default="", help="free text, metadata only")
     p.add_argument("--call", default="KM6AM")
     p.add_argument("--freq", type=float, default=145.55)
     p.add_argument("--tone", type=int, default=1000)
     p.add_argument("--dev", type=int, default=3000, help="commanded peak deviation, Hz")
     p.add_argument("--settle", type=float, default=1.0, help="seconds after each level change")
+    p.add_argument("--tail-db", type=float, default=3.0,
+                   help="coarse pass continues until SINAD is below this twice (default 3)")
     p.add_argument("--avg-coarse", type=float, default=1.0, help="seconds per coarse reading")
     p.add_argument("--avg-fine", type=float, default=3.0, help="seconds per fine reading")
     p.add_argument("--device", help="audio input (default: auto-detect the USB adapter)")

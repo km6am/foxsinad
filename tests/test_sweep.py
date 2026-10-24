@@ -77,22 +77,41 @@ def test_finds_the_12db_point():
     sweep.pick_device = lambda spec=None: 99
     sweep.RUNS = Path(tempfile.mkdtemp())
     args = sweep.argparse.Namespace(
-        pad_db=PAD_DB, label="stub", condition="bench", note="", call="N0CALL",
+        pad_db=PAD_DB, label="run", session=None, radio="stub", condition="bench",
+        note="", call="N0CALL",
         freq=145.55, tone=1000, dev=3000, settle=0.0, avg_coarse=0.0, avg_fine=0.0,
-        device=None, port=None, cal=str(sweep.DEFAULT_CAL), monitor=None)
+        device=None, port=None, cal=str(sweep.DEFAULT_CAL), monitor=None, tail_db=3.0)
     an = StubAnalyzer(None)
     sweep.SinadAnalyzer = lambda device, **kw: an
     point = sweep.run(args)
     assert point is not None and abs(point - TRUE_12DB_DBM) < 0.3, point
-    rows = [l for l in next(sweep.RUNS.glob("*.csv")).read_text().splitlines()
+    rows = [l for l in (sweep.RUNS / "run_stub_bench_145.55MHz.csv").read_text().splitlines()
             if l.startswith(("coarse", "fine"))]
     # 1 sanity reading + one per row + exactly one redo for the overlapping ID
     assert an.reads == len(rows) + 2, (an.reads, len(rows))
     assert not sweep._id_in_progress(FOX.events)
     assert FOX.att == 127, "the sweep must leave the attenuator at 127"
-    csv_text = next(sweep.RUNS.glob("*.csv")).read_text()
+    out = sweep.RUNS / "run_stub_bench_145.55MHz.csv"          # run.py's naming
+    csv_text = out.read_text()
     assert "phase,gen_dbm,level_dbm,level_uv,sinad_db,sinad_sd,n,time,att,n_discarded" in csv_text
+    for key in ("# label: run_stub_bench_145.55MHz", "# radio: stub", "# condition: bench",
+                "# sinad12_dbm: ", "# sinad12_sigma_db: ", "# sinad12_fit_points: "):
+        assert key in csv_text, key
+    assert not list(sweep.RUNS.glob("*.partial.csv")), "partial file must be removed"
+    coarse = [l for l in csv_text.splitlines() if l.startswith("coarse")]
+    assert float(coarse[-1].split(",")[4]) < 3.0, "coarse pass must reach the tail"
     print(f"PASS test_finds_the_12db_point: found {point:.2f} dBm (true {TRUE_12DB_DBM})")
+
+
+def test_naming_matches_run_py():
+    import tempfile
+    d = Path(tempfile.mkdtemp())
+    assert sweep.compose_label("run", "UV K5", "", sweep.freq_tag(146.0)) == "run_UV_K5_146MHz"
+    stem = str(d / "run_x_bench_145.55MHz")
+    assert sweep.unique_label(stem) == stem
+    Path(stem + ".csv").write_text("")
+    assert sweep.unique_label(stem) == stem + "_2"
+    print("PASS test_naming_matches_run_py")
 
 
 def test_twelve_db_point_interpolation():
@@ -109,6 +128,7 @@ def test_uv_matches_hp8935_csvs():
 
 
 if __name__ == "__main__":
+    test_naming_matches_run_py()
     test_twelve_db_point_interpolation()
     test_uv_matches_hp8935_csvs()
     test_finds_the_12db_point()
