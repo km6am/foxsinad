@@ -221,7 +221,8 @@ def t_probe(hp, fox, args):
 
 def _writerows(name, header, rows):
     CAL_DIR.mkdir(exist_ok=True)
-    path = CAL_DIR / f"{name}_{date.today().isoformat()}.csv"
+    # Timestamped so a same-day rerun never overwrites an earlier run.
+    path = CAL_DIR / f"{name}_{time.strftime('%Y-%m-%d_%H%M%S')}.csv"
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(header)
@@ -437,10 +438,42 @@ def t3b_deviation_corrected(hp, fox, args):
                ("tone_hz", "zoh_gain", "dev_cmd_hz", "dev_meas_hz", "sd_hz"), rows)
 
 
+def t2_wide(hp, fox, args):
+    """Carrier level vs frequency, 130-149 MHz, at ATT 0 and 64.
+
+    Needs the bench-only WIDE firmware (firmware/build.sh wide). The two
+    attenuator settings separate the two readings of T2's full-power dip:
+    a filter response shapes both curves alike; amplifier compression
+    would show at ATT 0 only.
+    """
+    hello = fox.hello()
+    if "WIDE" not in hello:
+        raise Hp8935Error(
+            f"PicoFox reports {hello!r}, not the bench-only WIDE build.\n"
+            "Flash firmware/build-wide/foxsinad_fw.ino.uf2 first "
+            "(cd ~/foxsinad/firmware && ./build.sh wide).")
+    freqs = sorted(set(range(130, 150)) | {145.55})
+    rows = []
+    for f in freqs:
+        sa_setup(hp, f)
+        fox.set_freq(f)
+        for att in (0, 64):
+            fox.set_att(att)
+            fox.carrier()
+            time.sleep(args.settle)
+            dbm = sa_peak_dbm(hp, f) + args.cable_loss_db
+            rows.append((f, att, round(dbm, 2)))
+            print(f"{f:7.2f} MHz ATT {att:3d} -> {dbm:7.2f} dBm", flush=True)
+    fox.off()
+    fox.set_att(127)
+    _writerows("t2_wide", ("freq_mhz", "att", "dbm"), rows)
+
+
 TESTS = {
     "probe": t_probe,
     "t1-cal": t1_cal,
     "t2-flatness": t2_flatness,
+    "t2-wide": t2_wide,
     "t3-deviation": t3_deviation,
     "t3b-deviation-corrected": t3b_deviation_corrected,
     "t4-ceiling": t4_ceiling,
