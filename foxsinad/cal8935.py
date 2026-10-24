@@ -97,6 +97,16 @@ screen is up:
         except Hp8935Error:
             raise Hp8935Error(self.PING_HELP.format(port=self._ser.port)) from None
         if not reply.startswith("OK SINADCTL"):
+            if reply.strip().upper() == "PING":
+                # Our own characters came back: IBASIC Echo On is echoing
+                # keystrokes, so they went to the front panel, not to a
+                # running program.
+                raise Hp8935Error(
+                    "The 8935 echoed the command back - characters are going\n"
+                    "to the front panel, so SINADCTL is not running. On the\n"
+                    "IBASIC CONTROLLER screen press the `Run` softkey (or load\n"
+                    "it with hp8935_sinad_serial's load.py), then retry."
+                )
             raise Hp8935Error(
                 f"PING answered {reply!r} instead of 'OK SINADCTL <ver>'.\n"
                 "Something other than SINADCTL is on the line - if a stale\n"
