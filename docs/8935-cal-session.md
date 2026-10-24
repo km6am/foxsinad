@@ -9,7 +9,7 @@ mandates.
 
 Commands below assume `cd ~/foxsinad` and
 `PY=~/miniconda3/envs/sota-rf/bin/python`. Every test accepts
-`--port-8935 <dev>` (required, your usual 8935 adapter) and
+`--port-8935 <dev>` (defaults to the hp8935 tools' remembered port) and
 `--port-fox <dev>` (default: first `/dev/cu.usbmodem*`).
 
 ## T0 — setup (once)
@@ -26,7 +26,7 @@ Commands below assume `cd ~/foxsinad` and
    starts every run with `PING` and refuses to continue without a reply.
 4. Preflight probe (checks both links, sets nothing):
    ```bash
-   $PY -m foxsinad.cal8935 --port-8935 <dev> probe
+   $PY -m foxsinad.cal8935 probe
    ```
    It prints HELLO from the PicoFox, PING/STATUS from SINADCTL, and one
    `SCPIQ AFAN:FILT2?` as the echo-check canary.
@@ -42,7 +42,7 @@ search, marker level read.
 `SAN:MARK:PPE` then `SCPIQ MEAS:SAN:MARK:LEV?` (median of 3 reads).
 
 ```bash
-$PY -m foxsinad.cal8935 --port-8935 <dev> t1-cal
+$PY -m foxsinad.cal8935 t1-cal
 ```
 
 - Output: `cal/picofox_r3_attcal.json` (ATT → dBm) + CSV alongside.
@@ -61,7 +61,7 @@ Carrier at ATT 0 and ATT 64 on 144.10 / 145.55 / 146.50 / 147.90 MHz
 (SA re-centered each time, same marker read).
 
 ```bash
-$PY -m foxsinad.cal8935 --port-8935 <dev> t2-flatness
+$PY -m foxsinad.cal8935 t2-flatness
 ```
 
 Expect < ~1 dB variation; if larger, the cal table becomes per-frequency
@@ -84,7 +84,7 @@ Part B — audio flatness: `TONE <hz> 3000` for hz = 300…2400, read
 deviation and `MEAS:AFR:AFR?` (demodulated audio frequency readback).
 
 ```bash
-$PY -m foxsinad.cal8935 --port-8935 <dev> t3-deviation
+$PY -m foxsinad.cal8935 t3-deviation
 ```
 
 Expect: measured dev ≈ 0.951 × commanded at 1 kHz (the 5 kS/s sample
@@ -105,7 +105,7 @@ sound-card analyzer defaults to)* · `MEAS:AFR:SEL 'SINAD'`. PicoFox:
 40, 80.
 
 ```bash
-$PY -m foxsinad.cal8935 --port-8935 <dev> t4-ceiling
+$PY -m foxsinad.cal8935 t4-ceiling
 ```
 
 **PASS: ≥ ~20 dB at every level.** Comfortably above 20 → the 12 dB
@@ -122,7 +122,7 @@ plateau at the T4 ceiling. Any slope says modulation quality depends on
 level (it shouldn't) or the attenuator is doing something non-passive.
 
 ```bash
-$PY -m foxsinad.cal8935 --port-8935 <dev> t5-sinad-vs-power
+$PY -m foxsinad.cal8935 t5-sinad-vs-power
 ```
 
 Output: CSV `att, level_dbm, sinad_db, sinad_sd` — this is also the
@@ -134,7 +134,7 @@ From a **cold** PicoFox (powered off ≥30 min, then on): carrier at
 ATT 0, SA marker level logged every 30 s for 20 min.
 
 ```bash
-$PY -m foxsinad.cal8935 --port-8935 <dev> t6-warmup
+$PY -m foxsinad.cal8935 t6-warmup
 ```
 
 Expect < a few tenths of a dB after warm-up; whatever it is becomes the

@@ -27,6 +27,16 @@ from .picofox import PicoFox
 
 CAL_DIR = Path(__file__).resolve().parents[1] / "cal"
 DEFAULT_FREQ_MHZ = 145.55
+HP8935_CONFIG = Path.home() / ".config" / "hp8935_sinad" / "config.json"
+
+
+def hp8935_remembered():
+    """(port, callsign) from the hp8935_sinad tools' own config, else Nones."""
+    try:
+        cfg = json.loads(HP8935_CONFIG.read_text())
+    except (OSError, ValueError):
+        return None, None
+    return cfg.get("port"), (cfg.get("station") or {}).get("call")
 
 
 class Hp8935Error(RuntimeError):
@@ -311,10 +321,13 @@ TESTS = {
 
 
 def main():
+    saved_port, saved_call = hp8935_remembered()
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--port-8935", required=True, help="8935 serial adapter device")
+    p.add_argument("--port-8935", default=saved_port, required=saved_port is None,
+                   help="8935 serial adapter (default: the hp8935_sinad tools' "
+                        f"remembered port{f', {saved_port}' if saved_port else ''})")
     p.add_argument("--port-fox", help="PicoFox port (default: first usbmodem)")
-    p.add_argument("--call", default="KM6AM")
+    p.add_argument("--call", default=saved_call or "KM6AM")
     p.add_argument("--freq", type=float, default=DEFAULT_FREQ_MHZ)
     p.add_argument("--cable-loss-db", type=float, default=0.0,
                    help="added to every SA reading (loss of the test cable)")
