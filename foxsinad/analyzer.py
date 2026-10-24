@@ -322,9 +322,9 @@ def main():
                     flags.append("CLIP")
                 if r.n_discarded:
                     flags.append(f"{r.n_discarded} dropped")
-                status_line(f"SINAD {r.sinad_db:5.1f} dB {sinad_bar(r.sinad_db)} "
-                            f"sd {r.std_db:3.1f}  peak {peak_dbfs(r.peak):5.1f} dBFS "
-                            + " ".join(flags))
+                status_line(f"SINAD {r.sinad_db:5.1f} dB {' '.join(flags)} "
+                            f"{sinad_bar(r.sinad_db)} sd {r.std_db:3.1f} "
+                            f"peak {peak_dbfs(r.peak):5.1f} dBFS")
         except KeyboardInterrupt:
             print()
 

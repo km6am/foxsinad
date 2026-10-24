@@ -29,22 +29,23 @@ from .sweep import CalTable, DEFAULT_CAL, read_clean
 
 def hint(r):
     """What to do next, from one reading."""
+    # Short, most important words first: narrow terminals cut the line.
     if r.under_range:
-        return "no audio: check the cable, the radio's volume, and that squelch is open"
+        return "NO AUDIO: cable/volume/squelch"
     if r.peak >= CLIP_LEVEL:
-        return "audio clipping: turn the radio's volume down"
+        return "CLIPPING: radio volume down"
     s = r.sinad_db
     # The sweep has ~16 dB of PicoFox range either side of ATT 64, so
     # anywhere within a few dB of 12 is good enough.
     if s >= 20:
-        return "far too strong: add a lot of attenuation (tens of dB)"
+        return "WAY TOO STRONG: add lots"
     if s > 16:
-        return "too strong: add attenuation"
+        return "TOO STRONG: add atten"
     if s >= 9:
-        return "GOOD (12 dB +/- a few is fine). Press Ctrl-C."
+        return "GOOD: press Ctrl-C"
     if s >= 4:
-        return "too weak: remove attenuation"
-    return "nothing yet (noise only): remove attenuation"
+        return "TOO WEAK: remove atten"
+    return "NOISE ONLY: remove atten"
 
 
 def main():
@@ -85,7 +86,7 @@ def main():
                 while True:
                     r = read_clean(fox, an, settle_s=0.0, avg_s=1.0)
                     last = r
-                    status_line(f"SINAD {r.sinad_db:5.1f} dB {sinad_bar(r.sinad_db)} {hint(r)}")
+                    status_line(f"{r.sinad_db:5.1f} dB  {hint(r)}  {sinad_bar(r.sinad_db)}")
             except KeyboardInterrupt:
                 print("\nturning RF off ...")
             finally:
