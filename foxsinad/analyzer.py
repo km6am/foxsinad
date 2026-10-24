@@ -41,6 +41,21 @@ def status_line(text):
     print("\r" + text[:width].ljust(width), end="", flush=True)
 
 
+def sinad_bar(sinad_db, width=24, full_db=36.0, mark_db=12.0):
+    """A text bar for SINAD, 0 to full_db, with '|' at the 12 dB mark."""
+    filled = int(max(0.0, min(full_db, sinad_db)) / full_db * width)
+    mark = round(mark_db / full_db * width)
+    cells = ["#" if i < filled else "." for i in range(width)]
+    if 0 <= mark < width and mark >= filled:
+        cells[mark] = "|"
+    return "[" + "".join(cells) + "]"
+
+
+def peak_dbfs(peak):
+    import math
+    return 20 * math.log10(max(peak, 1e-12))
+
+
 def make_bandpass(fs, hpf_hz=200.0, lpf_hz=3000.0):
     return filters.make_audio_filter(fs, hpf_hz, lpf_hz)
 
@@ -301,16 +316,17 @@ def main():
             while t_end is None or time.time() < t_end:
                 r = an.read(settle_s=0.0, avg_s=args.avg)
                 flags = []
-                if r.n_discarded:
-                    flags.append(f"{r.n_discarded} discarded")
                 if r.under_range:
-                    flags.append("UNDER-RANGE")
+                    flags.append("NO AUDIO")
                 if r.peak >= CLIP_LEVEL:
                     flags.append("CLIP")
-                print(f"SINAD {r.sinad_db:5.1f} dB  std {r.std_db:4.1f}  "
-                      f"peak {r.peak:.3f}  {' '.join(flags)}", flush=True)
+                if r.n_discarded:
+                    flags.append(f"{r.n_discarded} dropped")
+                status_line(f"SINAD {r.sinad_db:5.1f} dB {sinad_bar(r.sinad_db)} "
+                            f"sd {r.std_db:3.1f}  peak {peak_dbfs(r.peak):5.1f} dBFS "
+                            + " ".join(flags))
         except KeyboardInterrupt:
-            pass
+            print()
 
 
 if __name__ == "__main__":

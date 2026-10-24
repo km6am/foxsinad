@@ -21,7 +21,8 @@ RF is always turned off at the end (with the Morse ID).
 import argparse
 import sys
 
-from .analyzer import CLIP_LEVEL, SinadAnalyzer, pick_device, pick_monitor, status_line
+from .analyzer import CLIP_LEVEL, SinadAnalyzer, pick_device, pick_monitor, sinad_bar, \
+    status_line
 from .picofox import PicoFox, PicoFoxError
 from .sweep import CalTable, DEFAULT_CAL, read_clean
 
@@ -82,7 +83,7 @@ def main():
                 while True:
                     r = read_clean(fox, an, settle_s=0.0, avg_s=1.0)
                     last = r
-                    status_line(f"SINAD {r.sinad_db:5.1f} dB  {hint(r)}")
+                    status_line(f"SINAD {r.sinad_db:5.1f} dB {sinad_bar(r.sinad_db)} {hint(r)}")
             except KeyboardInterrupt:
                 print("\nturning RF off ...")
             finally:
