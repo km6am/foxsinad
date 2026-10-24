@@ -127,11 +127,43 @@ class SinadAnalyzer:
         )
 
 
-def find_device(name_fragment):
-    for d in sounddevice.query_devices():
-        if d["max_input_channels"] and name_fragment.lower() in d["name"].lower():
-            return d["index"]
+# Names a USB line-in adapter may show up under. The UFO202's codec chip
+# (TI PCM2902) may enumerate under its generic "USB Audio CODEC" name
+# rather than "UFO202"; on that basis this list is a guess, so pick_device()
+# prints what it chose and --device overrides it.
+AUTO_NAMES = ("UFO202", "USB Audio CODEC", "USB AUDIO CODEC", "USB Audio Device")
+
+
+def list_devices():
+    """(index, name, max_in, max_out, default_samplerate) for every device."""
+    return [(d["index"], d["name"], d["max_input_channels"], d["max_output_channels"],
+             d["default_samplerate"]) for d in sounddevice.query_devices()]
+
+
+def find_device(name_fragment, need_output=False):
+    for idx, name, n_in, n_out, _ in list_devices():
+        if n_in and (n_out or not need_output) and name_fragment.lower() in name.lower():
+            return idx
     raise LookupError(f"no input device matching {name_fragment!r}")
+
+
+def pick_device(spec=None, need_output=False):
+    """Device index from an explicit index/name, or auto-detected from
+    AUTO_NAMES. Never falls back to a built-in microphone: its voice
+    processing removes test tones (measured on a MacBook Pro)."""
+    if spec is not None:
+        spec = str(spec)
+        return int(spec) if spec.isdigit() else find_device(spec, need_output)
+    for name in AUTO_NAMES:
+        try:
+            idx = find_device(name, need_output)
+        except LookupError:
+            continue
+        print(f"audio device: [{idx}] {sounddevice.query_devices(idx)['name']} (auto-detected)")
+        return idx
+    lines = "\n".join(f"  [{i}] {n}  (in {a}, out {b})" for i, n, a, b, _ in list_devices())
+    raise LookupError("no USB line-in adapter found. Plug in the UFO202 (switch on LINE),\n"
+                      "or name a device with --device. Devices seen:\n" + lines)
 
 
 def main():
@@ -139,8 +171,8 @@ def main():
     import time
 
     p = argparse.ArgumentParser(description="Live SINAD meter")
-    p.add_argument("--device", default="UFO202",
-                   help="input device index or name substring (default UFO202)")
+    p.add_argument("--device", help="input device index or name substring "
+                   "(default: auto-detect the USB line-in adapter)")
     p.add_argument("--list-devices", action="store_true")
     p.add_argument("--hpf", type=float, default=200.0)
     p.add_argument("--lpf", type=float, default=3000.0)
@@ -155,7 +187,7 @@ def main():
                 print(f"{d['index']:3} {d['name']}")
         return
 
-    device = int(args.device) if args.device.isdigit() else find_device(args.device)
+    device = pick_device(args.device)
     t_end = time.time() + args.seconds if args.seconds else None
     with SinadAnalyzer(device, hpf_hz=args.hpf, lpf_hz=args.lpf) as an:
         try:
