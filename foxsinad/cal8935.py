@@ -598,6 +598,97 @@ def _plot_freq_drift(csv_path, freq_mhz):
     fig.savefig(png, dpi=150)
     print(f"wrote {png}")
 
+
+# ------------------------------------------- T8: watch a reference warm up
+def _to_hz(value, expect_hz):
+    """An 8935 frequency reply in Hz, kHz or MHz, as Hz: whichever scaling
+    lands nearest the expected frequency (works at any frequency)."""
+    return min((value * k for k in (1.0, 1e3, 1e6)), key=lambda hz: abs(hz - expect_hz))
+
+
+def t8_ref_warmup(args):
+    """Frequency of an external source (e.g. a 10 MHz GPSDO) vs time after
+    switch-on, counted by the 8935's RF analyzer on its internal reference.
+    No PicoFox involved."""
+    f = args.ref_mhz
+    target = f * 1e6
+    CAL_DIR.mkdir(exist_ok=True)
+    csv_path = CAL_DIR / f"t8_ref_warmup_{time.strftime('%Y-%m-%d_%H%M%S')}.csv"
+
+    with Sinadctl(args.port_8935) as hp:
+        print("8935:", hp.ping())
+        sel = hp.scpiq("CONF:REF:INP:SEL?").upper()
+        print(f"8935 Ref Select: {sel}")
+        if "EXT" in sel:
+            raise Hp8935Error(
+                "The 8935 is locked to an external reference, so it would be\n"
+                "measuring the source against itself. Set INSTRUMENT CONFIGURE >\n"
+                "Ref Select to Internal, then run this again.")
+        if "AUTO" in sel:
+            print("  (Auto: make sure nothing is connected to the 8935's external\n"
+                  "   reference input, or it will lock to it.)")
+        try:
+            rfan_counter_setup(hp, f)
+        except Hp8935Error as e:
+            raise Hp8935Error(f"the RF analyzer wouldn't tune to {f} MHz:\n{e}")
+        tuned = _to_hz(float(hp.scpiq("RFAN:FREQ?")), target)
+        if abs(tuned - target) > 1e3:
+            raise Hp8935Error(f"the RF analyzer reads back {tuned/1e6:.6f} MHz, "
+                              f"not {f} MHz - probably outside its range")
+        gate = hp.scpiq("RFAN:FREQ:GTIM?")
+        print(f"RF analyzer tuned to {tuned/1e6:.6f} MHz; RF Cnt Gate reply: {gate}")
+        print(f"(At {f:g} MHz, 1 Hz of error is {1/f:.3g} ppm.)")
+        input("\n>>> Source output to RF IN/OUT. Switch the source ON, then press Enter ... ")
+        t_on = time.time()
+
+        end = t_on + args.minutes * 60
+        try:
+            with open(csv_path, "w", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(["t_since_on_s", "freq_hz", "error_hz", "error_ppm", "gate_time_reply"])
+                while time.time() < end:
+                    t0 = time.time()
+                    reply = hp.scpiq("MEAS:RFR:FREQ:ABS?")
+                    t = time.time() - t_on
+                    try:
+                        hz = _to_hz(float(reply), target)
+                    except ValueError:
+                        print(f"t={t:7.1f} s  no reading yet ({reply!r})", flush=True)
+                    else:
+                        err = hz - target
+                        w.writerow((round(t, 1), round(hz, 1), round(err, 1),
+                                    round(err / target * 1e6, 4), gate))
+                        fh.flush()
+                        print(f"t={t:7.1f} s  {hz/1e6:.6f} MHz  {err:+8.1f} Hz  "
+                              f"({err/target*1e6:+.3f} ppm)", flush=True)
+                    time.sleep(max(0.0, args.interval - (time.time() - t0)))
+        except KeyboardInterrupt:
+            print("\nstopped early")
+    print(f"wrote {csv_path}")
+    _plot_ref_warmup(csv_path, f)
+
+
+def _plot_ref_warmup(csv_path, freq_mhz):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rows = list(csv.DictReader(open(csv_path)))
+    if not rows:
+        return
+    fig, ax = plt.subplots(figsize=(7.6, 4.2))
+    ax.plot([float(r["t_since_on_s"]) / 60 for r in rows], [float(r["error_hz"]) for r in rows],
+            "o-", ms=3, lw=1.2, color="#2a78d6")
+    ax.axhline(0, color="#9a9892", lw=1.0, ls="--")
+    ax.set_xlabel("time since switch-on (min)")
+    ax.set_ylabel(f"frequency error vs {freq_mhz:g} MHz (Hz)")
+    ax.set_title(f"{freq_mhz:g} MHz source frequency error vs time since switch-on", loc="left")
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    png = csv_path.with_suffix(".png")
+    fig.savefig(png, dpi=150)
+    print(f"wrote {png}")
+
 TESTS = {
     "probe": t_probe,
     "t1-cal": t1_cal,
@@ -624,19 +715,23 @@ def main():
     p.add_argument("--settle", type=float, default=1.0,
                    help="seconds after each source change before measuring")
     p.add_argument("--minutes", type=float, default=30.0,
-                   help="t7-freq-drift: how long to log (default 30)")
+                   help="t7/t8: how long to log (default 30)")
     p.add_argument("--interval", type=float, default=5.0,
-                   help="t7-freq-drift: seconds between readings (default 5)")
+                   help="t7/t8: seconds between readings (default 5)")
     p.add_argument("--att", type=int, default=40,
                    help="t7-freq-drift: PicoFox attenuator setting (default 40)")
     p.add_argument("--already-on", action="store_true",
                    help="t7-freq-drift: run even though the PicoFox is already powered")
-    p.add_argument("test", choices=sorted([*TESTS, "t7-freq-drift"]))
+    p.add_argument("--ref-mhz", type=float, default=10.0,
+                   help="t8-ref-warmup: source frequency, MHz (default 10)")
+    p.add_argument("test", choices=sorted([*TESTS, "t7-freq-drift", "t8-ref-warmup"]))
     args = p.parse_args()
 
     try:
         if args.test == "t7-freq-drift":
             t7_freq_drift(args)  # starts with the PicoFox off, so not via _run
+        elif args.test == "t8-ref-warmup":
+            t8_ref_warmup(args)  # no PicoFox at all
         else:
             _run(args)
     except Hp8935Error as e:
