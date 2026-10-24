@@ -72,11 +72,37 @@ class Sinadctl:
     def _send(self, line):
         self._ser.write((line + "\r\n").encode())
 
+    PING_HELP = """\
+No reply to PING on {port}.
+
+Please ensure SINADCTL is running on the 8935 and the IBASIC CONTROLLER
+screen is up:
+
+  1. On the 8935: Software Menu -> TESTS (IBASIC CONTROLLER). If SINADCTL
+     is already in memory, press the `Run` softkey; if not, load it:
+         cd ~/Code/hp8935_sinad_serial && ~/miniconda3/envs/vnafit/bin/python load.py
+  2. If it was running and the 8935 was power-cycled: Serial In is stuck
+     on `IBASIC` with nothing running (the OPERATING.md trap). Front
+     panel: I/O CONFIGURE -> Serial In -> `Inst`, then Run or reload.
+  3. Not sure which state it's in? This observes rather than guesses:
+         cd ~/Code/hp8935_sinad_serial && ~/miniconda3/envs/vnafit/bin/python run.py state
+     (want: `SINADCTL running`)
+  4. Also worth a glance: right adapter ({port}), 9600 8-N-1, and that
+     nothing else has the port open."""
+
     def ping(self):
         self._send("PING")
-        reply = self._readline()
+        try:
+            reply = self._readline()
+        except Hp8935Error:
+            raise Hp8935Error(self.PING_HELP.format(port=self._ser.port)) from None
         if not reply.startswith("OK SINADCTL"):
-            raise Hp8935Error(f"PING got {reply!r} - is SINADCTL running?")
+            raise Hp8935Error(
+                f"PING answered {reply!r} instead of 'OK SINADCTL <ver>'.\n"
+                "Something other than SINADCTL is on the line - if a stale\n"
+                "program or half-typed command is involved, QUIT/Run it per\n"
+                "hp8935_sinad_serial OPERATING.md section 4."
+            )
         return reply
 
     def scpi(self, cmd):
@@ -336,6 +362,14 @@ def main():
     p.add_argument("test", choices=sorted(TESTS))
     args = p.parse_args()
 
+    try:
+        _run(args)
+    except Hp8935Error as e:
+        print(f"\n8935 problem:\n{e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _run(args):
     with Sinadctl(args.port_8935) as hp, PicoFox(args.port_fox) as fox:
         print("8935:", hp.ping())
         print("PicoFox:", fox.hello())
