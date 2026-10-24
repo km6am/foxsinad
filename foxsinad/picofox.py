@@ -113,17 +113,17 @@ def main():
 
     with PicoFox(args.port) as fox:
         if args.call:
-            print("CALL", fox.cmd(f"CALL {args.call}"))
+            print(fox.cmd(f"CALL {args.call}"))
         if args.freq is not None:
-            print("FREQ", fox.set_freq(args.freq))
+            print(fox.set_freq(args.freq))
         if args.att is not None:
-            print("ATT", fox.set_att(args.att))
+            print(fox.set_att(args.att))
         if args.tone:
-            print("TONE", fox.tone(*args.tone))
+            print(fox.tone(*args.tone))
         if args.carrier:
-            print("CARRIER", fox.carrier())
+            print(fox.carrier())
         if args.off:
-            print("OFF", fox.off())
+            print(fox.off())
         if args.status or not any([args.call, args.freq is not None,
                                    args.att is not None, args.tone,
                                    args.carrier, args.off]):
