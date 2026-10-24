@@ -166,14 +166,79 @@ $PY -m foxsinad.cal8935 t6-warmup
 ```
 
 Expect < a few tenths of a dB after warm-up; whatever it is becomes the
-cal table's stated level uncertainty. (Frequency drift is the TCXO's
-problem and irrelevant to FM reception.)
+cal table's stated level uncertainty. Frequency drift is T7.
+
+## T7 — carrier frequency vs time from a cold start
+
+What it measures: the PicoFox's carrier frequency, counted by the 8935's
+RF analyzer, from the moment the PicoFox is switched on until it has
+warmed up. The PicoFox's frequency comes from a 25 MHz TCXO; this shows
+how far it is off at power-up and how long it takes to settle.
+
+**What the numbers mean.** The 8935 measures against its own internal
+reference, so:
+- the **change over time** is the PicoFox's warm-up, as long as the 8935
+  itself is fully warmed up and stable;
+- the **absolute offset** includes the 8935's own reference error, which
+  hasn't been checked against an external standard.
+
+### Before the session
+
+1. **Switch the 8935 on early** and let it warm up (at least as long as
+   you normally would; longer is better for this test). Start SINADCTL
+   the usual way.
+2. **Leave the PicoFox switched off (SW3 off) for at least 30 minutes**,
+   so it starts cold. Keep its USB cable plugged into the Mac, and its SMA
+   cabled to the 8935's **RF IN/OUT** port.
+3. Optional, for finer resolution: on the 8935's RF ANALYZER screen, set
+   **RF Cnt Gate** longer. The script reads the gate time and records it,
+   but doesn't change it.
+
+### Running it
+
+```bash
+$PY -m foxsinad.cal8935 t7-freq-drift
+```
+
+1. The script pings the 8935, sets up the RF analyzer to count frequency
+   at 145.55 MHz, and prints the gate time.
+   - If the PicoFox is already powered, the script stops: it wouldn't be
+     a cold start. (Add `--already-on` to measure a warm start anyway.)
+2. It then prints **"Switch the PicoFox ON now (SW3)"**. Switch it on.
+3. Within a few seconds of the PicoFox appearing on USB, the script sets
+   the callsign, 145.55 MHz and `ATT 40`, and turns on an **unmodulated
+   carrier**. It prints how many seconds after power-up that happened.
+4. It reads the frequency **every 5 s for 30 minutes** and prints each
+   reading: frequency, error in Hz, and error in ppm.
+   - Readings taken while a Morse ID is being sent (every 9 minutes) are
+     marked `[ID]` and left out of the plot; the ID's modulation upsets
+     the counter.
+   - **Ctrl-C** ends early. Either way, RF is turned off at the end
+     (with the final Morse ID) and the attenuator is set to 127.
+
+Options: `--minutes`, `--interval` (seconds), `--att`, `--freq`.
+
+### Output
+
+- `cal/t7_freq_drift_<date_time>.csv`: one row per reading, written as it
+  goes, so an interrupted run keeps its data. Columns: seconds since
+  PicoFox power-up (from its own uptime counter), frequency (Hz), error
+  (Hz and ppm), whether an ID was in progress, and the gate-time reading.
+- `cal/t7_freq_drift_<date_time>.png`: error vs minutes since power-up.
+
+Not yet run on hardware: the script was checked against simulated
+instruments only. Every 8935 command in it is from the manual
+(`MEAS:RFR:SEL 'Frequency'`, `MEAS:RFR:FREQ:ABS?`, `RFAN:FREQ:GTIM?`) or
+from SINADCTL (`CONF:RFD 'Freq'`, which the manual says must come before
+`RFAN:FREQ`). On the first reading, check that the printed frequency
+matches the RF ANALYZER screen.
 
 ## Order and time
 
 T0 probe (2 min) → T4 first — it's the gate; if it fails nothing else
 matters (10 min) → T1 (15 min) → T3 (10 min) → T5 (10 min) → T2 (5 min)
-→ T6 whenever a cold start is convenient (20 min unattended).
+→ T6 or T7 whenever a cold start is convenient (20–30 min unattended).
+T6 and T7 each need their own cold start.
 
 ## Verify-on-bench notes (things the manual + protocol can't settle)
 

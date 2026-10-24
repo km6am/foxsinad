@@ -14,6 +14,7 @@ then abort the point.
 
 import argparse
 import csv
+import glob
 import json
 import statistics
 import sys
@@ -439,6 +440,164 @@ def t3b_deviation_corrected(hp, fox, args):
 
 
 
+
+# ------------------------------------------------- T7: frequency vs warm-up
+def rfan_counter_setup(hp, freq_mhz):
+    """RF analyzer counting the carrier frequency on RF IN/OUT.
+
+    Every string here is from the 8935 manual or proven code: CONF:RFD
+    'Freq' must precede RFAN:FREQ (manual; SINADCTL's FREQ verb sends the
+    same), and 'Frequency' is MEAS:RFR:SEL's absolute-frequency choice.
+    """
+    hp.scpi("CONF:RFD 'Freq'")
+    hp.scpi("DISP RFAN")
+    hp.scpi("RFAN:INP 'RF In'")
+    hp.scpi(f"RFAN:FREQ {freq_mhz} MHZ")
+    hp.scpi("MEAS:RFR:SEL 'Frequency'")
+    time.sleep(1.0)
+
+
+def _fox_ports():
+    return sorted(glob.glob("/dev/cu.usbmodem*"))
+
+
+def _wait_for_fox(port_hint, timeout_s=1800):
+    """Wait for the PicoFox's USB port to appear, then open it once the
+    firmware answers (USB enumerates a moment before the firmware is ready)."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        ports = [port_hint] if port_hint and Path(port_hint).exists() else _fox_ports()
+        for port in ports:
+            try:
+                fox = PicoFox(port)
+                fox.hello()
+                return fox
+            except Exception:
+                try:
+                    fox.close()
+                except Exception:
+                    pass
+        time.sleep(0.2)
+    raise Hp8935Error("the PicoFox never appeared on USB - is SW3 on and the cable in?")
+
+
+def t7_freq_drift(args):
+    """Carrier frequency from cold power-up, against a warmed-up 8935.
+
+    Run order: start this with the PicoFox switched OFF; it sets up the
+    8935, then asks you to switch the PicoFox on, programs it at once
+    (unmodulated carrier) and logs the frequency every --interval seconds
+    for --minutes. The time axis is seconds since the PicoFox powered up,
+    from its own uptime counter. Samples taken while a Morse ID was being
+    sent are flagged and left out of the plot. Ctrl-C stops early; RF is
+    always turned off at the end.
+    """
+    if _fox_ports() and not args.already_on:
+        raise Hp8935Error(
+            "The PicoFox is already powered (its USB port is present), so this\n"
+            "would not be a cold start. Switch it off with SW3, leave it off\n"
+            "for 30 minutes, then start this again. (Or add --already-on to\n"
+            "measure a warm start anyway.)")
+
+    f = args.freq
+    target_hz = f * 1e6
+    CAL_DIR.mkdir(exist_ok=True)
+    stamp = time.strftime("%Y-%m-%d_%H%M%S")
+    csv_path = CAL_DIR / f"t7_freq_drift_{stamp}.csv"
+
+    with Sinadctl(args.port_8935) as hp:
+        print("8935:", hp.ping())
+        rfan_counter_setup(hp, f)
+        gate = hp.scpiq("RFAN:FREQ:GTIM?")
+        print(f"RF counter gate time (RF Cnt Gate, as set on the 8935): {gate}")
+        print(f"\n>>> Switch the PicoFox ON now (SW3). Waiting for it on USB ...")
+        fox = _wait_for_fox(args.port_fox)
+        t_seen = time.time()
+        try:
+            print("PicoFox:", fox.hello())
+            fox.set_call(args.call)
+            fox.set_freq(f)
+            fox.set_att(args.att)
+            fox.carrier()
+            st = fox.status()
+            boot_host_t = time.time() - float(st["up"])
+            print(f"carrier on at {f} MHz, ATT {args.att}, "
+                  f"{t_seen - boot_host_t:.1f} s after power-up\n")
+
+            rows, in_id, seen_events = [], False, 0
+            end = time.time() + args.minutes * 60
+            with open(csv_path, "w", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(["t_since_powerup_s", "freq_hz", "error_hz", "error_ppm",
+                            "during_id", "gate_time_reply"])
+                while time.time() < end:
+                    t0 = time.time()
+                    fox.status()  # also collects *ID events
+                    id_seen = False
+                    for ev in fox.events[seen_events:]:
+                        if ev.startswith("*ID"):
+                            id_seen = True
+                            in_id = ev.startswith("*ID START")
+                    seen_events = len(fox.events)
+                    reply = hp.scpiq("MEAS:RFR:FREQ:ABS?")
+                    t = time.time() - boot_host_t
+                    try:
+                        hz = _as_mhz(float(reply)) * 1e6
+                    except ValueError:
+                        print(f"t={t:7.1f} s  no frequency reading ({reply!r}); skipped",
+                              flush=True)
+                        time.sleep(max(0.0, args.interval - (time.time() - t0)))
+                        continue
+                    err = hz - target_hz
+                    during_id = int(in_id or id_seen)
+                    row = (round(t, 1), round(hz, 1), round(err, 1),
+                           round(err / target_hz * 1e6, 4), during_id, gate)
+                    rows.append(row)
+                    w.writerow(row)
+                    fh.flush()
+                    print(f"t={t:7.1f} s  {hz/1e6:.6f} MHz  {err:+8.1f} Hz  "
+                          f"({err/target_hz*1e6:+.3f} ppm){'  [ID]' if during_id else ''}",
+                          flush=True)
+                    time.sleep(max(0.0, args.interval - (time.time() - t0)))
+        except KeyboardInterrupt:
+            print("\nstopped early")
+        finally:
+            try:
+                fox.off()
+                fox.set_att(127)
+            except Exception:
+                pass
+            fox.close()
+    print(f"wrote {csv_path}")
+    _plot_freq_drift(csv_path, f)
+
+
+def _plot_freq_drift(csv_path, freq_mhz):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rows = list(csv.DictReader(open(csv_path)))
+    if not rows:
+        return
+    t = [float(r["t_since_powerup_s"]) / 60 for r in rows]
+    e = [float(r["error_hz"]) for r in rows]
+    ok = [r["during_id"] == "0" for r in rows]
+    fig, ax = plt.subplots(figsize=(7.6, 4.2))
+    ax.plot([x for x, k in zip(t, ok) if k], [y for y, k in zip(e, ok) if k],
+            "o-", ms=3, lw=1.2, color="#2a78d6", label="carrier")
+    ax.plot([x for x, k in zip(t, ok) if not k], [y for y, k in zip(e, ok) if not k],
+            "o", ms=4, mfc="none", color="#9a9892", label="during Morse ID (excluded)")
+    ax.set_xlabel("time since PicoFox power-up (min)")
+    ax.set_ylabel(f"frequency error vs {freq_mhz} MHz (Hz)")
+    ax.set_title("PicoFox carrier frequency error vs time since power-up", loc="left")
+    ax.grid(alpha=0.3)
+    ax.legend(frameon=False, fontsize=8.5)
+    fig.tight_layout()
+    png = csv_path.with_suffix(".png")
+    fig.savefig(png, dpi=150)
+    print(f"wrote {png}")
+
 TESTS = {
     "probe": t_probe,
     "t1-cal": t1_cal,
@@ -464,11 +623,22 @@ def main():
                    help="added to every SA reading (loss of the test cable)")
     p.add_argument("--settle", type=float, default=1.0,
                    help="seconds after each source change before measuring")
-    p.add_argument("test", choices=sorted(TESTS))
+    p.add_argument("--minutes", type=float, default=30.0,
+                   help="t7-freq-drift: how long to log (default 30)")
+    p.add_argument("--interval", type=float, default=5.0,
+                   help="t7-freq-drift: seconds between readings (default 5)")
+    p.add_argument("--att", type=int, default=40,
+                   help="t7-freq-drift: PicoFox attenuator setting (default 40)")
+    p.add_argument("--already-on", action="store_true",
+                   help="t7-freq-drift: run even though the PicoFox is already powered")
+    p.add_argument("test", choices=sorted([*TESTS, "t7-freq-drift"]))
     args = p.parse_args()
 
     try:
-        _run(args)
+        if args.test == "t7-freq-drift":
+            t7_freq_drift(args)  # starts with the PicoFox off, so not via _run
+        else:
+            _run(args)
     except Hp8935Error as e:
         print(f"\n8935 problem:\n{e}", file=sys.stderr)
         sys.exit(1)
