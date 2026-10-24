@@ -166,10 +166,10 @@ def sa_peak_dbm(hp, reads=3):
     return level
 
 
-def afan_setup(hp, filt2, sel):
+def afan_setup(hp, filt2, sel, filt1="300Hz HPF"):
     hp.scpi("DISP AFAN")
     hp.scpi("AFAN:INP 'FM Demod'")
-    hp.scpi("AFAN:FILT1 '300Hz HPF'")
+    hp.scpi(f"AFAN:FILT1 '{filt1}'")
     hp.scpi(f"AFAN:FILT2 '{filt2}'")
     hp.scpi(f"MEAS:AFR:SEL '{sel}'")
     time.sleep(1.0)
@@ -382,7 +382,9 @@ def t3b_deviation_corrected(hp, fox, args):
     fox.set_freq(f)
     fox.set_att(40)
     hp.scpi(f"RFAN:FREQ {f} MHZ")
-    afan_setup(hp, filt2="3kHz LPF", sel="AF Freq")
+    # 20 Hz HPF (manual's FILT1 list): the 300 Hz HPF used in the first
+    # t3b run took ~25% off the 300 Hz tone.
+    afan_setup(hp, filt2="3kHz LPF", sel="AF Freq", filt1="20Hz HPF")
 
     rows = []
     for hz in (300, 500, 800, 1000, 1500, 2000, 2400):
@@ -396,7 +398,7 @@ def t3b_deviation_corrected(hp, fox, args):
               f"measured {meas:7.1f} Hz ({meas/target - 1:+.1%} vs target)")
     fox.off()
     fox.set_att(127)
-    _writerows("t3b_deviation_corrected",
+    _writerows("t3b_deviation_corrected_hpf20",
                ("tone_hz", "zoh_gain", "dev_cmd_hz", "dev_meas_hz", "sd_hz"), rows)
 
 
