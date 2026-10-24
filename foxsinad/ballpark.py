@@ -53,8 +53,10 @@ def main():
     p.add_argument("--dev", type=int, default=3000)
     p.add_argument("--device", help="audio input (default: auto-detect the USB adapter)")
     p.add_argument("--port", help="PicoFox serial port (default: auto)")
-    p.add_argument("--monitor", nargs="?", const="default", metavar="OUTPUT",
-                   help="also play the radio's audio on the computer's output")
+    p.add_argument("--monitor", action="store_true",
+                   help="also play the audio on the computer's speakers")
+    p.add_argument("--monitor-device", metavar="OUTPUT",
+                   help="play it on this output instead (name or number)")
     p.add_argument("--monitor-gain", type=float, default=1.0)
     args = p.parse_args()
 
@@ -62,7 +64,8 @@ def main():
     last = None
     try:
         dev = pick_device(args.device)
-        mon = pick_monitor(args.monitor, dev) if args.monitor else None
+        mon = pick_monitor(args.monitor_device or "default", dev) \
+            if (args.monitor or args.monitor_device) else None
         with PicoFox(args.port) as fox, SinadAnalyzer(dev, monitor=mon,
                                                       monitor_gain=args.monitor_gain) as an:
             print("PicoFox:", fox.hello())

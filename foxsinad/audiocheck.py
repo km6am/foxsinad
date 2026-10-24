@@ -2,6 +2,7 @@
 
     python3 -m foxsinad.audiocheck devices     # list audio devices; show which is auto-picked
     python3 -m foxsinad.audiocheck level       # live input level, for setting the radio's volume
+    python3 -m foxsinad.audiocheck level --monitor   # ...and hear it on the computer's speakers
     python3 -m foxsinad.audiocheck loopback    # the analyzer's own floor: adapter output -> input
 
 loopback plays a 1 kHz tone out of the adapter's line output and measures
@@ -56,8 +57,8 @@ def cmd_devices(_args):
 def cmd_level(args):
     dev = pick_device(args.device)
     mon = None
-    if args.monitor:
-        out = pick_monitor(args.monitor, dev)
+    if args.monitor or args.monitor_device:
+        out = pick_monitor(args.monitor_device or "default", dev)
         mon = Monitor(out, FS, args.monitor_gain)
         print(f"monitoring on: [{out}] {sounddevice.query_devices(out)['name']}")
     print("Live input level. Aim for peaks between -20 and -6 dBFS with the test tone on.\n"
@@ -108,14 +109,18 @@ def cmd_loopback(args):
 
 def main():
     p = argparse.ArgumentParser(description="Audio bring-up checks for the SINAD analyzer.")
-    p.add_argument("--device", help="audio device index or name (default: auto-detect)")
-    p.add_argument("--monitor", nargs="?", const="default", metavar="OUTPUT",
-                   help="level: also play the audio on the computer's output")
-    p.add_argument("--monitor-gain", type=float, default=1.0)
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--device", help="audio input, index or name (default: auto-detect)")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("devices", help="list audio devices")
-    sub.add_parser("level", help="live input level meter")
-    lb = sub.add_parser("loopback", help="measure the analyzer's own SINAD floor")
+    sub.add_parser("devices", help="list audio devices", parents=[common])
+    lv = sub.add_parser("level", help="live input level meter", parents=[common])
+    lv.add_argument("--monitor", action="store_true",
+                    help="also play the audio on the computer's speakers")
+    lv.add_argument("--monitor-device", metavar="OUTPUT",
+                    help="play it on this output instead (name or number)")
+    lv.add_argument("--monitor-gain", type=float, default=1.0)
+    lb = sub.add_parser("loopback", help="measure the analyzer's own SINAD floor",
+                        parents=[common])
     lb.add_argument("--seconds", type=float, default=3.0)
     lb.add_argument("--level-dbfs", type=float, default=-12.0)
     args = p.parse_args()

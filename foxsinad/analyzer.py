@@ -271,9 +271,10 @@ def main():
     p.add_argument("--device", help="input device index or name substring "
                    "(default: auto-detect the USB line-in adapter)")
     p.add_argument("--list-devices", action="store_true")
-    p.add_argument("--monitor", nargs="?", const="default", metavar="OUTPUT",
-                   help="also play the audio on the computer's output "
-                        "(or a named/numbered output device)")
+    p.add_argument("--monitor", action="store_true",
+                   help="also play the audio on the computer's speakers")
+    p.add_argument("--monitor-device", metavar="OUTPUT",
+                   help="play it on this output instead (name or number)")
     p.add_argument("--monitor-gain", type=float, default=1.0)
     p.add_argument("--hpf", type=float, default=200.0)
     p.add_argument("--lpf", type=float, default=3000.0)
@@ -290,8 +291,8 @@ def main():
 
     device = pick_device(args.device)
     mon = None
-    if args.monitor:
-        mon = pick_monitor(args.monitor, device)
+    if args.monitor or args.monitor_device:
+        mon = pick_monitor(args.monitor_device or "default", device)
         print(f"monitoring on: [{mon}] {sounddevice.query_devices(mon)['name']}")
     t_end = time.time() + args.seconds if args.seconds else None
     with SinadAnalyzer(device, hpf_hz=args.hpf, lpf_hz=args.lpf,

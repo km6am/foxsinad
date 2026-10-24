@@ -110,7 +110,8 @@ def run(args):
         print(f"warning: the cal table was measured at {cal.freq_mhz} MHz, "
               f"you're sweeping at {args.freq} MHz")
     dev = pick_device(args.device)
-    mon = pick_monitor(args.monitor, dev) if getattr(args, "monitor", None) else None
+    want = getattr(args, "monitor", False) or getattr(args, "monitor_device", None)
+    mon = pick_monitor(getattr(args, "monitor_device", None) or "default", dev) if want else None
     RUNS.mkdir(exist_ok=True)
     label = args.label or f"foxsinad_{args.condition}_{args.freq:g}MHz"
     stamp = datetime.now()
@@ -250,8 +251,10 @@ def main():
     p.add_argument("--device", help="audio input (default: auto-detect the USB adapter)")
     p.add_argument("--port", help="PicoFox serial port (default: auto)")
     p.add_argument("--cal", default=str(DEFAULT_CAL))
-    p.add_argument("--monitor", nargs="?", const="default", metavar="OUTPUT",
-                   help="also play the radio's audio on the computer's output")
+    p.add_argument("--monitor", action="store_true",
+                   help="also play the audio on the computer's speakers")
+    p.add_argument("--monitor-device", metavar="OUTPUT",
+                   help="play it on this output instead (name or number)")
     args = p.parse_args()
     try:
         run(args)
