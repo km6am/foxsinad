@@ -38,10 +38,12 @@ class Reading:
 class StubFox:
     def __init__(self, port=None):
         self.att, self.events, self.statuses = 127, [], 0
+        self.cabled_calls = []
     def __enter__(self): return self
     def __exit__(self, *a): pass
     def hello(self): return "FOXSINAD 0.2.0 REV3 (stub)"
     def set_call(self, c): pass
+    def set_cabled(self, on): self.cabled_calls.append(on)
     def set_freq(self, f): pass
     def set_att(self, a): self.att = a
     def tone(self, hz, dev): pass
@@ -91,6 +93,7 @@ def test_finds_the_12db_point():
     assert an.reads == len(rows) + 2, (an.reads, len(rows))
     assert not sweep._id_in_progress(FOX.events)
     assert FOX.att == 127, "the sweep must leave the attenuator at 127"
+    assert FOX.cabled_calls == [False, False], "cabled mode set explicitly, and off at the end"
     out = sweep.RUNS / "run_stub_bench_145.55MHz.csv"          # run.py's naming
     csv_text = out.read_text()
     assert "phase,gen_dbm,level_dbm,level_uv,sinad_db,sinad_sd,n,time,att,n_discarded" in csv_text
@@ -101,6 +104,35 @@ def test_finds_the_12db_point():
     coarse = [l for l in csv_text.splitlines() if l.startswith("coarse")]
     assert float(coarse[-1].split(",")[4]) < 3.0, "coarse pass must reach the tail"
     print(f"PASS test_finds_the_12db_point: found {point:.2f} dBm (true {TRUE_12DB_DBM})")
+
+
+def test_cabled_never_outlives_a_run():
+    from foxsinad import picofox
+    fox = StubFox()
+    picofox.set_cabled(fox, True)
+    assert fox.cabled_calls == [True]
+
+    class OldFirmware(StubFox):
+        def set_cabled(self, on):
+            raise picofox.PicoFoxError("'CABLED OFF': unknown command CABLED")
+    picofox.set_cabled(OldFirmware(), False)          # nothing to turn off: fine
+    try:
+        picofox.set_cabled(OldFirmware(), True)
+    except picofox.PicoFoxError as e:
+        assert "0.3.0" in str(e)
+    else:
+        raise AssertionError("asking old firmware for cabled mode must fail")
+
+    class Transmitting(StubFox):
+        def set_cabled(self, on):
+            raise picofox.PicoFoxError("'CABLED OFF': turn RF off first")
+    try:
+        picofox.set_cabled(Transmitting(), False)
+    except picofox.PicoFoxError:
+        pass
+    else:
+        raise AssertionError("other errors must not be swallowed")
+    print("PASS test_cabled_never_outlives_a_run")
 
 
 def test_naming_matches_run_py():
@@ -129,6 +161,7 @@ def test_uv_matches_hp8935_csvs():
 
 if __name__ == "__main__":
     test_naming_matches_run_py()
+    test_cabled_never_outlives_a_run()
     test_twelve_db_point_interpolation()
     test_uv_matches_hp8935_csvs()
     test_finds_the_12db_point()

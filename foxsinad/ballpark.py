@@ -15,7 +15,7 @@ radio's SINAD live while you turn the step attenuator:
      attenuator + fixed pads + cables). The sweep command to run next is
      printed for you.
 
-RF is always turned off at the end (with the Morse ID).
+RF is always turned off at the end, with the Morse ID unless --cabled.
 """
 
 import argparse
@@ -23,7 +23,7 @@ import sys
 
 from .analyzer import CLIP_LEVEL, SinadAnalyzer, pick_device, pick_monitor, sinad_bar, \
     status_line
-from .picofox import PicoFox, PicoFoxError
+from .picofox import PicoFox, PicoFoxError, set_cabled
 from .sweep import CalTable, DEFAULT_CAL, read_clean
 
 
@@ -52,6 +52,9 @@ def main():
     p = argparse.ArgumentParser(description="Set the external attenuation before a sweep.")
     p.add_argument("--att", type=int, default=64, help="PicoFox attenuator setting (default 64)")
     p.add_argument("--call", default="KM6AM")
+    p.add_argument("--cabled", action="store_true",
+                   help="output into a load or test equipment only, never an antenna: "
+                        "no Morse ID (needs firmware 0.3.0)")
     p.add_argument("--freq", type=float, default=145.55)
     p.add_argument("--tone", type=int, default=1000)
     p.add_argument("--dev", type=int, default=3000)
@@ -73,6 +76,7 @@ def main():
         with PicoFox(args.port) as fox, SinadAnalyzer(dev, monitor=mon,
                                                       monitor_gain=args.monitor_gain) as an:
             print("PicoFox:", fox.hello())
+            set_cabled(fox, args.cabled)
             fox.set_call(args.call)
             fox.set_freq(args.freq)
             fox.set_att(args.att)
@@ -90,8 +94,9 @@ def main():
             except KeyboardInterrupt:
                 print("\nturning RF off ...")
             finally:
-                fox.off()           # sends the Morse ID
+                fox.off()           # sends the Morse ID, unless cabled
                 fox.set_att(127)
+                set_cabled(fox, False)
     except (LookupError, PicoFoxError) as e:
         sys.exit(f"error: {e}")
 
@@ -109,7 +114,7 @@ def main():
               "(a rough figure; the sweep measures it properly).")
     print("\nNext:")
     print(f"  ~/miniconda3/envs/sota-rf/bin/python -m foxsinad.sweep --pad-db {pad:g} "
-          f"--radio <radio> --condition <condition>")
+          f"--radio <radio> --condition <condition>" + (" --cabled" if args.cabled else ""))
     print("  (add --session <name> to group runs in a folder, --monitor to listen)")
 
 

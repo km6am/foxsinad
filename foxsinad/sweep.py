@@ -37,7 +37,7 @@ from pathlib import Path
 import numpy as np
 
 from .analyzer import CLIP_LEVEL, SinadAnalyzer, pick_device, pick_monitor
-from .picofox import PicoFox, PicoFoxError
+from .picofox import PicoFox, PicoFoxError, set_cabled
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CAL = ROOT / "cal" / "picofox_r3_attcal.json"
@@ -184,11 +184,13 @@ def run(args):
     live = LivePlot(f"{label}  (pad {args.pad_db:g} dB)") if getattr(args, "live", False) else None
     with PicoFox(args.port) as fox, SinadAnalyzer(dev, monitor=mon) as an:
         print("PicoFox:", fox.hello())
+        cabled = getattr(args, "cabled", False)
+        set_cabled(fox, cabled)
         fox.set_call(args.call)
         fox.set_freq(args.freq)
         fox.set_att(0)
-        fox.tone(args.tone, args.dev)
         try:
+            fox.tone(args.tone, args.dev)
             r = read_clean(fox, an, 1.5, 1.0)
             top = cal.dbm(0) - args.pad_db
             if r.peak >= CLIP_LEVEL:
@@ -251,6 +253,7 @@ def run(args):
         finally:
             fox.off()
             fox.set_att(127)
+            set_cabled(fox, False)
 
     fine = [r for r in rows if r["phase"] == "fine"]
     fit = twelve_db_fit([r["level_dbm"] for r in fine], [r["sinad_db"] for r in fine])
@@ -265,6 +268,7 @@ def run(args):
         settle_s=args.settle, radio=args.radio or "(none)",
         condition=args.condition or "(none)", note=args.note,
         station_call=(args.call or "").upper() or "(not set)",
+        cabled="yes (no Morse ID)" if cabled else "no",
         session=args.session or "(none)",
         af_input=f"audio device {dev}", af_filter1="200Hz HPF (software)",
         af_filter2="3kHz LPF (software)", af_deemphasis="(radio's own)",
@@ -381,6 +385,9 @@ def main():
                    "goes in the file name")
     p.add_argument("--note", default="", help="free text, metadata only")
     p.add_argument("--call", default="KM6AM")
+    p.add_argument("--cabled", action="store_true",
+                   help="output into a load or test equipment only, never an antenna: "
+                        "no Morse ID (needs firmware 0.3.0)")
     p.add_argument("--freq", type=float, default=145.55)
     p.add_argument("--tone", type=int, default=1000)
     p.add_argument("--dev", type=int, default=3000, help="commanded peak deviation, Hz")
