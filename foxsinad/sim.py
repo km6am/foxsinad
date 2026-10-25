@@ -1,8 +1,9 @@
-"""A simulated bench: a PicoFox running foxsinad_fw 0.3.0, a step pad, and a
+"""A simulated bench: a PicoFox running foxsinad_fw 0.4.0, a step pad, and a
 radio feeding the SINAD analyzer. For developing and demonstrating the UI
 without hardware, and for tests.
 
-SimFox follows the firmware's rules (docs/API.md in foxsinad-firmware):
+SimFox has foxctl.PicoFox's methods (not the SCPI wire protocol; the
+firmware repo tests that) and follows the firmware's rules (docs/API.md):
 RF needs a callsign or cabled mode, cabled mode changes only with RF off,
 Morse IDs on schedule and at RF-off, and commands wait out an ID in
 progress. SimAnalyzer turns the PicoFox's level into SINAD through a
@@ -25,7 +26,7 @@ ID_SECONDS = 4.5        # measured for a 5-character callsign
 class SimFox:
     """Same methods as foxctl.PicoFox."""
 
-    def __init__(self, port="sim", speed=1.0, id_interval_s=ID_INTERVAL_S, version="0.3.0"):
+    def __init__(self, port="sim", speed=1.0, id_interval_s=ID_INTERVAL_S, version="0.4.0"):
         self.port = port
         self.speed = speed
         self.id_interval_s = id_interval_s
@@ -86,24 +87,25 @@ class SimFox:
         self.close()
 
     # -- commands -----------------------------------------------------------
-    def cmd(self, line):
-        raise PicoFoxError(f"{line!r}: raw commands aren't simulated")
+    def write(self, command):
+        raise PicoFoxError(f"{command!r}: raw SCPI isn't simulated")
+
+    query = write
 
     def hello(self):
-        return f"FOXSINAD {self.version} REV3 (simulated)"
+        return f"FOXSINAD,PicoFox r3 (simulated),0,{self.version}"
 
     def set_call(self, callsign):
         if not callsign or len(callsign) > 11:
-            raise PicoFoxError(f"'CALL {callsign}': CALL <callsign> (1-11 chars)")
+            raise PicoFoxError(f"callsign {callsign!r}: 1-11 letters, digits or /")
         self.call = callsign.upper()
         return f"CALL {self.call}"
 
     def set_cabled(self, on):
         with self._lock:
-            if self.version < "0.3.0":
-                raise PicoFoxError(f"'CABLED {'ON' if on else 'OFF'}': unknown command CABLED")
             if self.mode != "OFF":
-                raise PicoFoxError(f"'CABLED {'ON' if on else 'OFF'}': turn RF off first")
+                raise PicoFoxError(f"'OUTP:CABL {'ON' if on else 'OFF'}': "
+                                   "-221 Settings conflict;turn the output off first")
             self.cabled = bool(on)
             return f"CABLED {'ON' if on else 'OFF'}"
 
@@ -123,7 +125,8 @@ class SimFox:
 
     def _rf_on(self, mode, tone_hz=0, dev_hz=0):
         if not self.call and not self.cabled:
-            raise PicoFoxError(f"'{mode}': set CALL first, or CABLED ON")
+            raise PicoFoxError(f"'OUTP ON': -221 Settings conflict;no callsign (IDEN:CALL) "
+                               "and not cabled (OUTP:CABL)")
         with self._lock:
             self._wait_for_id()
             if self.mode == "OFF":
@@ -156,9 +159,9 @@ class SimFox:
     def send_id(self):
         with self._lock:
             if self.mode == "OFF":
-                raise PicoFoxError("'ID': RF is off")
+                raise PicoFoxError("'IDEN': -221 Settings conflict;output is off")
             if not self.call:
-                raise PicoFoxError("'ID': set CALL first")
+                raise PicoFoxError("'IDEN': -221 Settings conflict;no callsign (IDEN:CALL)")
             self._wait_for_id()
             self._send_id_now()
             return "ID"
@@ -169,7 +172,8 @@ class SimFox:
         return dict(mode=self.mode, freq=f"{self.freq:.6f}", att=str(self.att),
                     tone=str(self.tone_hz), dev=str(self.dev_hz), call=self.call or "-",
                     rev="3", since_id=str(int(now - self._last_id)),
-                    up=str(int(now - self._t0)), cabled="1" if self.cabled else "0")
+                    up=str(int(now - self._t0)), cabled="1" if self.cabled else "0",
+                    id_active="1" if self._id_until is not None else "0")
 
 
 def radio_sinad(level_dbm, twelve_db_dbm, ceiling_db=32.0):

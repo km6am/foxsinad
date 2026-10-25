@@ -41,7 +41,7 @@ class StubFox:
         self.cabled_calls = []
     def __enter__(self): return self
     def __exit__(self, *a): pass
-    def hello(self): return "FOXSINAD 0.2.0 REV3 (stub)"
+    def hello(self): return "FOXSINAD,PicoFox r3 (stub),0,0.4.0"
     def set_call(self, c): pass
     def set_cabled(self, on): self.cabled_calls.append(on)
     def set_freq(self, f): pass
@@ -110,22 +110,13 @@ def test_cabled_never_outlives_a_run():
     from foxsinad import picofox
     fox = StubFox()
     picofox.set_cabled(fox, True)
-    assert fox.cabled_calls == [True]
-
-    class OldFirmware(StubFox):
-        def set_cabled(self, on):
-            raise picofox.PicoFoxError("'CABLED OFF': unknown command CABLED")
-    picofox.set_cabled(OldFirmware(), False)          # nothing to turn off: fine
-    try:
-        picofox.set_cabled(OldFirmware(), True)
-    except picofox.PicoFoxError as e:
-        assert "0.3.0" in str(e)
-    else:
-        raise AssertionError("asking old firmware for cabled mode must fail")
+    picofox.set_cabled(fox, 0)
+    assert fox.cabled_calls == [True, False]
 
     class Transmitting(StubFox):
         def set_cabled(self, on):
-            raise picofox.PicoFoxError("'CABLED OFF': turn RF off first")
+            raise picofox.PicoFoxError("'OUTP:CABL OFF': -221 Settings conflict;"
+                                       "turn the output off first")
     try:
         picofox.set_cabled(Transmitting(), False)
     except picofox.PicoFoxError:

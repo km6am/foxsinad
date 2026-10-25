@@ -56,7 +56,7 @@ Commands below assume `cd ~/foxsinad` and
    ```bash
    $PY -m foxsinad.cal8935 probe
    ```
-   It prints HELLO from the PicoFox, PING/STATUS from SINADCTL, and one
+   It prints the PicoFox's identity (*IDN?), PING/STATUS from SINADCTL, and one
    `SCPIQ AFAN:FILT2?` as the echo-check canary.
 
 ## T1 — cal table: SA marker power vs ATT  *(your "pull power off the SA")*

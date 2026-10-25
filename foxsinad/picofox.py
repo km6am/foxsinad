@@ -37,18 +37,9 @@ main = foxctl.main
 
 def set_cabled(fox, cabled):
     """Puts cabled mode in the state asked for. The firmware keeps it until
-    power-off, so every run sets it explicitly: one run's cabled mode must
-    never carry into a run on an antenna. Firmware before 0.3.0 has no
-    cabled mode, which is fine when asking for it off."""
-    try:
-        fox.set_cabled(bool(cabled))
-    except PicoFoxError as e:
-        if "unknown command" not in str(e):
-            raise
-        if cabled:
-            raise PicoFoxError(
-                "cabled mode needs foxsinad_fw 0.3.0 or newer; flash it with "
-                f"{FIRMWARE_REPO / 'tools' / 'flash.py'}") from e
+    power-off or *RST, so every run sets it explicitly: one run's cabled
+    mode must never carry into a run on an antenna."""
+    fox.set_cabled(bool(cabled))
 
 
 if __name__ == "__main__":

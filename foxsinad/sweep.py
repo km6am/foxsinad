@@ -433,7 +433,7 @@ def main():
     p.add_argument("--call", default="KM6AM")
     p.add_argument("--cabled", action="store_true",
                    help="output into a load or test equipment only, never an antenna: "
-                        "no Morse ID (needs firmware 0.3.0)")
+                        "no Morse ID")
     p.add_argument("--freq", type=float, default=145.55)
     p.add_argument("--tone", type=int, default=1000)
     p.add_argument("--dev", type=int, default=3000, help="commanded peak deviation, Hz")

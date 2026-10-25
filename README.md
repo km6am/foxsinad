@@ -19,7 +19,9 @@ The PicoFox firmware and its driver live in their own repo,
 [km6am/foxsinad-firmware](https://github.com/km6am/foxsinad-firmware),
 checked out at `~/foxsinad-firmware` (or set `FOXSINAD_FIRMWARE`).
 `foxsinad.picofox` loads that repo's `tools/foxctl.py` rather than keeping
-a copy, so protocol changes are made in one place. `firmware/` here is the
+a copy, so protocol changes are made in one place. Since firmware 0.4.0
+the PicoFox speaks SCPI; `python -m foxsinad.picofox --scpi "FREQ?"` sends
+any command. `firmware/` here is the
 frozen 0.1.0 pre-release.
 
 ```bash
@@ -29,7 +31,7 @@ frozen 0.1.0 pre-release.
 That editable install makes `python -m foxsinad.<tool>` run this checkout
 from any directory.
 
-**Cabled mode** (`--cabled` on `sweep` and `ballpark`; firmware 0.3.0): for
+**Cabled mode** (`--cabled` on `sweep` and `ballpark`; firmware 0.4.0): for
 output that goes only into a load or test equipment, so no Morse ID is
 sent. Every run sets it on or off explicitly and turns it off at the end,
 so it never carries into a run on an antenna.
