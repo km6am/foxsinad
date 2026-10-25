@@ -83,7 +83,8 @@ def main():
             out = cal.dbm(args.att)
             print("\nStep attenuator at MAXIMUM first. Then reduce it until SINAD reads "
                   "about 12 dB.")
-            input(f"Ready? Press Enter to start the tone (PicoFox at ATT {args.att}, "
+            input(f"Ready? Press Enter to start the tone (PicoFox at {args.att * 0.25:g} dB, "
+                  f"ATT {args.att}; "
                   f"about {out:+.1f} dBm out) ... ")
             try:
                 fox.tone(args.tone, args.dev)

@@ -51,6 +51,20 @@ const S = {
 const TIME_WINDOW_S = 120;
 const TARGET_DB = 12;
 
+// What a level means. Only a cabled path gives the level at the radio;
+// over the air the path loss is unknown, so levels are the PicoFox's output.
+const REF = {
+  radio: {text: "at the radio", axis: "level at the radio (dBm)", row: "At the radio"},
+  antenna: {text: "into the transmit antenna", axis: "level into the transmit antenna (dBm)", row: "Into the antenna"},
+  output: {text: "at the PicoFox output", axis: "PicoFox output (dBm)", row: null},
+};
+function setupRef() {
+  const s = S.state && S.state.setup;
+  if (!s) return "output";
+  return s.cabled ? "radio" : (s.pad_db ? "antenna" : "output");
+}
+const attText = (db) => `${(+db).toFixed(2)} dB (ATT ${Math.round(db * 4)})`;
+
 function loadPref(k, dflt) {
   try { return localStorage.getItem(`foxsinad.${k}`) || dflt; } catch { return dflt; }
 }
@@ -117,11 +131,12 @@ transport.events((ev) => {
     case "run_started":
       if (S.run && S.run.points.length) S.prevRuns.push(S.run.points);
       S.prevRuns = S.prevRuns.slice(-20);
-      S.run = {label: ev.label, index: ev.index, of: ev.of, points: [], mark: null};
+      S.run = {label: ev.label, index: ev.index, of: ev.of, points: [], mark: null,
+               ref: ev.level_ref || setupRef()};
       renderReadout(); draw();
       break;
     case "point":
-      if (!S.run) S.run = {label: "", index: 1, of: 1, points: [], mark: null};
+      if (!S.run) S.run = {label: "", index: 1, of: 1, points: [], mark: null, ref: setupRef()};
       S.run.points.push({phase: ev.phase, level: ev.level_dbm, sinad: ev.sinad_db,
                          sd: ev.sinad_sd, att: ev.att});
       renderReadout(); draw();
@@ -133,7 +148,8 @@ transport.events((ev) => {
       break;
     case "reading":
       S.readings.push({t: ev.t, sinad: ev.sinad_db, hint: ev.hint, level: ev.level_dbm,
-                       att: ev.att, clipped: ev.clipped, under: ev.under_range, mode: plotMode()});
+                       ref: ev.level_ref, attDb: ev.att_db, clipped: ev.clipped,
+                       under: ev.under_range, mode: plotMode()});
       S.readings = S.readings.filter((r) => ev.t - r.t <= TIME_WINDOW_S + 5);
       renderReadout(); draw();
       break;
@@ -165,10 +181,11 @@ $("stopBtn").addEventListener("click", () => send({cmd: "stop"}));
 
 const MODE_HELP = {
   sweep: "Steps the PicoFox down through its range and finds the 12 dB SINAD point. "
-       + "Needs the external attenuation, and the radio's squelch open.",
-  ballpark: "Transmits at the Ballpark ATT setting and shows SINAD live. Turn the step "
-          + "attenuator until it reads about 12 dB, Stop, then enter the total external "
-          + "attenuation.",
+       + "Cabled, it's the level at the radio; over the air, the PicoFox output. "
+       + "Open the radio's squelch first.",
+  ballpark: "Transmits at the ballpark attenuation and shows SINAD live. Adjust the step "
+          + "attenuator (cabled) or the spacing (over the air) until it reads about 12 dB, "
+          + "then Stop. Cabled: enter the total external attenuation.",
   meter: "Shows the radio's SINAD live without controlling the PicoFox.",
 };
 
@@ -187,7 +204,9 @@ function renderHeader() {
     ? `${st.mode[0].toUpperCase()}${st.mode.slice(1)} running` : "Idle";
   $("cabledBanner").hidden = !(st && st.setup.cabled);
   $("modeHelp").textContent = MODE_HELP[mode];
-  $("plotTitle").textContent = mode === "sweep" ? "SINAD vs level at the radio" : "SINAD over time";
+  const ref = S.run && running() ? S.run.ref : setupRef();
+  $("plotTitle").textContent = mode === "sweep"
+    ? `SINAD vs ${REF[ref].axis.replace(" (dBm)", "")}` : "SINAD over time";
 }
 
 // ---- run setup -------------------------------------------------------------------
@@ -198,14 +217,14 @@ const FIELDS = [
   {k: "note", label: "Note", type: "text"},
   {sep: true},
   {k: "pad_db", label: "External attenuation", unit: "dB", type: "number", step: "0.1",
-   hint: "step attenuator + pads + cables, total"},
+   hint: "between the PicoFox and the radio (cabled) or its antenna. Needed for cabled sweeps: only then is the level at the radio known."},
   {k: "call", label: "Callsign", type: "text"},
   {k: "freq", label: "Frequency", unit: "MHz", type: "number", step: "0.005"},
   {k: "tone", label: "Tone", unit: "Hz", type: "number", step: "1"},
   {k: "dev", label: "Deviation", unit: "Hz, commanded", type: "number", step: "100"},
   {sep: true},
   {k: "repeat", label: "Repeat", unit: "sweeps", type: "number", step: "1"},
-  {k: "ballpark_att", label: "Ballpark ATT", unit: "steps of 0.25 dB", type: "number", step: "1"},
+  {k: "ballpark_att_db", label: "Ballpark attenuation", unit: "dB, PicoFox", type: "number", step: "0.25"},
   {k: "quick", label: "Quick sweep (shorter readings)", type: "checkbox"},
   {k: "monitor", label: "Play the audio on the speakers", type: "checkbox"},
   {k: "cabled", label: "Cabled: no Morse ID", type: "checkbox"},
@@ -290,6 +309,7 @@ function renderStatus() {
   }
   const att = +f.att;
   const out = f.out_dbm, lvl = f.level_dbm;
+  const levelRow = f.level_ref && REF[f.level_ref].row;
   const on = f.mode !== "OFF";
   const outChip = !on ? `<span class="chip off">OFF</span>`
     : f.cabled === "1" ? `<span class="chip cabled">${esc(f.mode)} · cabled</span>`
@@ -302,9 +322,9 @@ function renderStatus() {
   const rows = [
     ["Output", outChip],
     ["Frequency", `${(+f.freq).toFixed(4)} MHz`],
-    ["Attenuator", Number.isNaN(att) ? "–" : `ATT ${att} · ${(att * 0.25).toFixed(2)} dB`],
+    ["Attenuation", Number.isNaN(att) ? "–" : attText(att / 4)],
     ["PicoFox out", out === undefined ? "–" : `${fmt(out, 1)} dBm`],
-    ["At the radio", lvl === undefined ? `<span class="muted">enter the external attenuation</span>` : `${fmt(lvl, 1)} dBm`],
+    ...(levelRow ? [[levelRow, `${fmt(lvl, 1)} dBm`]] : []),
     ["Tone", on && f.mode === "TONE" ? `${esc(f.tone)} Hz · ${esc(f.dev)} Hz dev` : `<span class="muted">${esc(f.tone)} Hz · ${esc(f.dev)} Hz dev (set)</span>`],
     ["Callsign", esc(f.call)],
     ["Morse ID", id],
@@ -326,7 +346,7 @@ function renderFoxEvents() {
 let sliderBusy = false;
 const slider = $("attSlider");
 slider.addEventListener("pointerdown", () => { sliderBusy = true; });
-slider.addEventListener("input", () => { sliderBusy = true; renderAttLabel(+slider.value); });
+slider.addEventListener("input", () => { sliderBusy = true; renderAttLabel(+slider.value); });  // dB
 slider.addEventListener("change", async () => {
   await send({cmd: "fox", action: "att", value: +slider.value});
   sliderBusy = false;
@@ -339,12 +359,13 @@ $("idBtn").addEventListener("click", () => send({cmd: "fox", action: "id"}));
 $("abortBtn").addEventListener("click", () => send({cmd: "fox", action: "abort"}));
 $("freqBtn").addEventListener("click", () => send({cmd: "fox", action: "freq", value: S.state.setup.freq}));
 
-function renderAttLabel(att) {
-  const out = calDbm(att);
-  const pad = S.state && S.state.setup.pad_db;
-  let txt = `ATT ${att} · ${(att * 0.25).toFixed(2)} dB`;
+function renderAttLabel(db) {
+  const out = calDbm(db * 4);
+  const pad = (S.state && S.state.setup.pad_db) || 0;
+  const ref = setupRef();
+  let txt = attText(db);
   if (out !== null) txt += ` · out ${fmt(out, 1)} dBm`;
-  if (out !== null && pad !== null && pad !== undefined) txt += ` · at radio ${fmt(out - pad, 1)} dBm`;
+  if (out !== null && REF[ref].row) txt += ` · ${REF[ref].row.toLowerCase()} ${fmt(out - pad, 1)} dBm`;
   $("attLabel").textContent = txt;
 }
 
@@ -355,7 +376,7 @@ function renderManual() {
   const all = ["toneBtn", "carrierBtn", "offBtn", "idBtn", "abortBtn", "freqBtn"];
   for (const id of all) $(id).disabled = !connected || mode === "sweep" || mode === "ballpark";
   slider.disabled = !connected || mode === "sweep";
-  if (f && !sliderBusy && !Number.isNaN(+f.att)) slider.value = f.att;
+  if (f && !sliderBusy && !Number.isNaN(+f.att)) slider.value = f.att / 4;
   renderAttLabel(+slider.value);
   $("manualHint").textContent = !connected ? "Connect the PicoFox to use these."
     : mode === "sweep" ? "Locked while a sweep runs."
@@ -385,9 +406,9 @@ function renderReadout() {
     let html = `<span class="sub">${esc(r.label)} · run ${r.index} of ${r.of}</span>`;
     if (r.mark !== null && r.mark !== undefined) {
       html = `<span class="big">${fmt(r.mark, 2)}<span class="unit">dBm</span></span>
-              <span class="sub">12 dB SINAD at the radio · ${esc(r.label)} · run ${r.index} of ${r.of}</span>`;
+              <span class="sub">12 dB SINAD ${REF[r.ref].text} · ${esc(r.label)} · run ${r.index} of ${r.of}</span>`;
     } else if (last) {
-      html += `<span class="sub">${last.phase} pass · ATT ${last.att} · ${fmt(last.level, 2)} dBm → ${fmt(last.sinad, 1)} dB SINAD</span>`;
+      html += `<span class="sub">${last.phase} pass · ${attText(last.att / 4)} · ${fmt(last.level, 2)} dBm ${REF[r.ref].text} → ${fmt(last.sinad, 1)} dB SINAD</span>`;
     }
     el.innerHTML = html;
     return;
@@ -398,7 +419,9 @@ function renderReadout() {
   if (last.hint) html += `<span class="tag ${HINT_CLASS(last.hint)}">${esc(last.hint)}</span>`;
   else if (last.under) html += `<span class="tag err">NO AUDIO</span>`;
   else if (last.clipped) html += `<span class="tag err">CLIPPING</span>`;
-  if (last.level !== null && last.level !== undefined) html += `<span class="sub">${fmt(last.level, 1)} dBm at the radio (ATT ${last.att})</span>`;
+  if (last.level !== null && last.level !== undefined) {
+    html += `<span class="sub">${fmt(last.level, 1)} dBm ${REF[last.ref || "output"].text} · ${attText(last.attDb)}</span>`;
+  }
   el.innerHTML = html;
 }
 
@@ -410,17 +433,21 @@ function renderResults() {
       <td>${i + 1}</td><td>${esc(r.label)}</td>
       <td class="num">${r.point_dbm === null ? "none" : fmt(r.point_dbm, 2)}</td>
       <td class="num">${r.sigma_db === null ? "–" : "± " + fmt(r.sigma_db, 2)}</td>
+      <td>${REF[r.level_ref || "radio"].text}</td>
       <td class="num">${r.fit_points ?? "–"}</td><td class="num">${fmt(r.pad_db, 1)}</td></tr>`).join("");
   const pts = rs.map((r) => r.point_dbm).filter((v) => v !== null);
+  const refs = new Set(rs.map((r) => r.level_ref || "radio"));
   let summary = "";
-  if (pts.length >= 2) {
+  if (refs.size > 1) {
+    summary = `<div class="summary">These runs measure levels in different places (cabled and over the air), so their spread isn't shown.</div>`;
+  } else if (pts.length >= 2) {
     const mean = pts.reduce((a, b) => a + b, 0) / pts.length;
     const sd = Math.sqrt(pts.reduce((a, b) => a + (b - mean) ** 2, 0) / (pts.length - 1));
     summary = `<div class="summary">${pts.length} runs: mean ${fmt(mean, 2)} dBm, run-to-run sd ${fmt(sd, 2)} dB,
       range ${fmt(Math.max(...pts) - Math.min(...pts), 2)} dB. All runs since the app started, whatever their setup.</div>`;
   }
   el.innerHTML = `<table><thead><tr><th>#</th><th>Run</th><th class="num">12 dB SINAD (dBm)</th>
-    <th class="num">Fit</th><th class="num">Points</th><th class="num">Pad (dB)</th></tr></thead>
+    <th class="num">Fit</th><th>Level</th><th class="num">Points</th><th class="num">Ext. atten. (dB)</th></tr></thead>
     <tbody>${rows}</tbody></table>${summary}`;
 }
 
@@ -497,7 +524,8 @@ function drawSweep(W, H) {
     x1 = Math.ceil(Math.max(...all.map((p) => p.level)) + 1);
   }
   const y1 = Math.max(30, Math.ceil(Math.max(0, ...all.map((p) => p.sinad)) / 5) * 5 + 2);
-  const {X, Y, f} = axes(W, H, x0, x1, 0, y1, "level at the radio (dBm)", (v) => String(v).replace("-", "−"));
+  const ref = S.run ? S.run.ref : setupRef();
+  const {X, Y, f} = axes(W, H, x0, x1, 0, y1, REF[ref].axis, (v) => String(v).replace("-", "−"));
   ctx.save(); ctx.beginPath(); ctx.rect(f.l, f.t, f.r - f.l, f.b - f.t); ctx.clip();
   // earlier runs: faint lines
   ctx.strokeStyle = css("--prev"); ctx.lineWidth = 1.5;
@@ -514,7 +542,7 @@ function drawSweep(W, H) {
     ctx.beginPath(); ctx.arc(x, y, 4, 0, 2 * Math.PI);
     if (p.phase === "fine") { ctx.fillStyle = accent; ctx.fill(); ctx.strokeStyle = surface; ctx.lineWidth = 1.5; ctx.stroke(); }
     else { ctx.fillStyle = surface; ctx.fill(); ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.stroke(); }
-    hitPoints.push({x, y, text: `${p.phase} · ATT ${p.att}<br>${fmt(p.level, 2)} dBm → ${fmt(p.sinad, 1)} dB SINAD (sd ${fmt(p.sd, 2)})`});
+    hitPoints.push({x, y, text: `${p.phase} · ${attText(p.att / 4)}<br>${fmt(p.level, 2)} dBm → ${fmt(p.sinad, 1)} dB SINAD (sd ${fmt(p.sd, 2)})`});
   }
   ctx.restore();
   const mark = S.run && S.run.mark;

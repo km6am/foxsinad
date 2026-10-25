@@ -12,9 +12,12 @@ Chain:
 Before running: radio on the test frequency, squelch fully OPEN, volume set
 so the tone peaks around -12 dBFS at full level (see `audiocheck level`).
 
-Levels at the radio come from the PicoFox calibration table
-(cal/picofox_r3_attcal.json, measured on the 8935) minus --pad-db, so
-their accuracy is the cal table's plus however well --pad-db is known.
+Levels come from the PicoFox calibration table (cal/picofox_r3_attcal.json,
+measured on the 8935) minus --pad-db. Only with --cabled is that the level
+at the radio (accurate to the cal table plus however well --pad-db is
+known). Over the air the path loss isn't known, so levels are the PicoFox's
+output (into the transmit antenna, after --pad-db): comparable between runs
+with the same setup, not absolute.
 
 Output follows hp8935_sinad_serial's run.py: the file name is
 <label>_<radio>_<condition>_<freq>MHz (or <session>/<radio>_<condition>_
@@ -59,9 +62,22 @@ class Stopped(Exception):
 class Result:
     label: str
     csv: Path
-    point_dbm: float = None     # 12 dB SINAD level at the radio, or None
+    point_dbm: float = None     # 12 dB SINAD level (see level_ref), or None
     sigma_db: float = None      # the fit's statistical uncertainty
     fit_points: int = None
+    level_ref: str = "radio"
+
+
+def level_reference(cabled, pad_db):
+    """What a level means: (key, phrase, axis label). The level at the
+    radio is known only on a cabled path; over the air the path loss isn't
+    known, so a level is the PicoFox's output, after any external
+    attenuator."""
+    if cabled:
+        return "radio", "at the radio", "level at the radio (dBm)"
+    if pad_db:
+        return "antenna", "into the transmit antenna", "level into the transmit antenna (dBm)"
+    return "output", "at the PicoFox output", "PicoFox output (dBm)"
 
 
 class CalTable:
@@ -212,8 +228,10 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
 
     rows = []
     cabled = getattr(args, "cabled", False)
+    ref, ref_text, xlabel = level_reference(cabled, args.pad_db)
     dev = None
-    live = LivePlot(f"{label}  (pad {args.pad_db:g} dB)") if getattr(args, "live", False) else None
+    live = LivePlot(f"{label}  (pad {args.pad_db:g} dB)", xlabel) \
+        if getattr(args, "live", False) else None
     with contextlib.ExitStack() as opened:
         if fox is None:
             fox = opened.enter_context(PicoFox(args.port))
@@ -241,7 +259,7 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
                                  "volume, and that its squelch is open.")
             if r.sinad_db < TARGET_DB:
                 raise SweepError(f"SINAD is only {r.sinad_db:.1f} dB at full level "
-                                 f"({top:.1f} dBm at the radio). Use less fixed attenuation.")
+                                 f"({top:.1f} dBm {ref_text}). Use less fixed attenuation.")
 
             with open(partial, "w", newline="") as fh:
                 w = csv.writer(fh)
@@ -267,7 +285,8 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
                     fh.flush()
                     flags = (" CLIP" if r.peak >= CLIP_LEVEL else "") + \
                             (f" ({r.n_discarded} windows discarded)" if r.n_discarded else "")
-                    log(f"{phase:6s} ATT {att:3d}  {lvl:8.2f} dBm  SINAD {r.sinad_db:5.1f} dB "
+                    log(f"{phase:6s} {att * 0.25:5.2f} dB (ATT {att:3d})  {lvl:8.2f} dBm  "
+                        f"SINAD {r.sinad_db:5.1f} dB "
                         f"(sd {r.std_db:.2f}){flags}")
                     return r.sinad_db
 
@@ -284,7 +303,7 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
                 below = [r["att"] for r in coarse if r["sinad_db"] < TARGET_DB]
                 if not below:
                     raise SweepError(f"SINAD is still above {TARGET_DB:g} dB at ATT 127 "
-                             f"({cal.dbm(127) - args.pad_db:.1f} dBm at the radio). "
+                             f"({cal.dbm(127) - args.pad_db:.1f} dBm {ref_text}). "
                              "Add more fixed attenuation and run again. "
                              f"(Readings so far: {partial})")
                 b = min(below)
@@ -315,6 +334,10 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
         condition=args.condition or "(none)", note=args.note,
         station_call=(args.call or "").upper() or "(not set)",
         cabled="yes (no Morse ID)" if cabled else "no",
+        level_ref={"radio": "level at the radio input (cabled: output - external attenuation)",
+                   "antenna": "PicoFox output into the transmit antenna, after the external "
+                              "attenuation; over the air, not the level at the radio",
+                   "output": "PicoFox output; over the air, not the level at the radio"}[ref],
         session=args.session or "(none)",
         af_input=getattr(args, "af_input", None) or f"audio device {dev}", af_filter1="200Hz HPF (software)",
         af_filter2="3kHz LPF (software)", af_deemphasis="(radio's own)",
@@ -336,21 +359,21 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
     else:
         pm = "" if sigma is None else f" +/- {sigma:.2f}"
         log(f"  => {TARGET_DB:g} dB SINAD at {point:.2f} dBm{pm}   "
-            f"({dbm_to_uv(point):.3f} uV) at the radio input")
+            f"({dbm_to_uv(point):.3f} uV) {ref_text}")
         if sigma is not None:
             log(f"     +/- is the fit's statistical uncertainty ({npts} points); it "
                 "excludes the cal table and --pad-db.")
-    plot(final, rows, point, log)
+    plot(final, rows, point, log, xlabel)
     if live:
         live.finish(point, hold_s=None if getattr(args, "hold", False) else 3.0)
-    return Result(label, final, point, sigma, npts)
+    return Result(label, final, point, sigma, npts, ref)
 
 
 class LivePlot:
     """A window that draws each reading as it's taken (like run.py's live
     plot). Closes itself at the end of the run unless hold_s is None."""
 
-    def __init__(self, title):
+    def __init__(self, title, xlabel="level at the radio (dBm)"):
         import matplotlib.pyplot as plt
         self.plt = plt
         plt.ion()
@@ -363,7 +386,7 @@ class LivePlot:
             "fine": self.ax.plot([], [], "o", ms=4, color="#2a78d6", label="fine")[0],
         }
         self.data = {"coarse": [], "fine": []}
-        self.ax.set_xlabel("level at the radio (dBm)")
+        self.ax.set_xlabel(xlabel)
         self.ax.set_ylabel("SINAD (dB)")
         self.ax.set_title(title, loc="left", fontsize=10)
         self.ax.grid(alpha=0.3)
@@ -392,7 +415,7 @@ class LivePlot:
             self.plt.close(self.fig)
 
 
-def plot(path, rows, point, log=_say):
+def plot(path, rows, point, log=_say, xlabel="level at the radio (dBm)"):
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 
@@ -408,9 +431,9 @@ def plot(path, rows, point, log=_say):
         ax.axvline(point, color="#eb6834", lw=1)
         ax.annotate(f"12 dB SINAD: {point:.1f} dBm", xy=(point, TARGET_DB), xytext=(6, 8),
                     textcoords="offset points", color="#eb6834", fontsize=9)
-    ax.set_xlabel("level at the radio (dBm)")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel("SINAD (dB)")
-    ax.set_title("SINAD vs level at the radio", loc="left")
+    ax.set_title(f"SINAD vs {xlabel.replace(' (dBm)', '')}", loc="left")
     ax.grid(alpha=0.3)
     ax.legend(frameon=False, fontsize=8.5)
     fig.tight_layout()

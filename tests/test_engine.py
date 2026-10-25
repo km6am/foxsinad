@@ -97,7 +97,7 @@ def test_ballpark_stop_turns_rf_off():
     assert eng.handle(dict(cmd="start", mode="ballpark"))["ok"]
     drain(q, lambda e: e["event"] == "reading")
     assert eng._fox_raw.mode == "TONE"
-    assert eng.handle(dict(cmd="fox", action="att", value=70))["ok"]
+    assert eng.handle(dict(cmd="fox", action="att", value=17.5))["ok"]
     eng.handle(dict(cmd="stop"))
     end = time.time() + 30
     while eng.mode != "idle" and time.time() < end:
@@ -106,6 +106,31 @@ def test_ballpark_stop_turns_rf_off():
     assert eng._fox_raw.mode == "OFF" and eng._fox_raw.att == 127
     eng.shutdown()
     print("PASS test_ballpark_stop_turns_rf_off")
+
+
+def test_level_is_at_the_radio_only_when_cabled():
+    eng, q = make()
+    eng.handle(dict(cmd="connect"))
+    eng.handle(dict(cmd="setup", pad_db=119))
+    eng._poll_once()
+    st = eng.last_status
+    assert st["level_ref"] == "antenna" and st["level_dbm"] == round(st["out_dbm"] - 119, 2)
+    eng.handle(dict(cmd="confirm_cabled"))
+    eng.handle(dict(cmd="setup", cabled=True))
+    eng._poll_once()
+    assert eng.last_status["level_ref"] == "radio"
+    eng.handle(dict(cmd="setup", cabled=False, pad_db=""))
+    eng._poll_once()
+    st = eng.last_status
+    assert st["level_ref"] == "output" and st["level_dbm"] == st["out_dbm"]
+    r = eng.handle(dict(cmd="setup", cabled=True))
+    assert r["ok"]
+    r = eng.handle(dict(cmd="start", mode="sweep"))
+    assert not r["ok"] and "external attenuation" in r["error"], r
+    eng.handle(dict(cmd="setup", ballpark_att_db=16.1))
+    assert eng.setup["ballpark_att_db"] == 16.0, "rounded to the attenuator's 0.25 dB steps"
+    eng.shutdown()
+    print("PASS test_level_is_at_the_radio_only_when_cabled")
 
 
 def test_watchdog_turns_rf_off_without_a_ui():
@@ -126,6 +151,7 @@ if __name__ == "__main__":
     test_no_callsign_no_rf()
     test_cabled_needs_confirmation_and_never_ids()
     test_ballpark_stop_turns_rf_off()
+    test_level_is_at_the_radio_only_when_cabled()
     test_watchdog_turns_rf_off_without_a_ui()
     test_sweep_finds_the_simulated_point()
     print("ALL PASS")

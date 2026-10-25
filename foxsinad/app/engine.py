@@ -26,7 +26,7 @@ from .. import sweep
 from ..analyzer import CLIP_LEVEL, peak_dbfs
 from ..ballpark import hint
 from ..picofox import PicoFox, PicoFoxError, find_port, set_cabled
-from ..sweep import CalTable, Stopped, SweepError, read_clean
+from ..sweep import CalTable, Stopped, SweepError, level_reference, read_clean
 
 WATCHDOG_S = 10.0
 STATUS_EVERY_S = 1.0
@@ -35,11 +35,12 @@ ID_INTERVAL_S = 540
 SETUP_DEFAULTS = dict(
     radio="", condition="", session="", note="", pad_db=None, call="",
     freq=145.55, tone=1000, dev=3000, repeat=1, quick=False, monitor=False,
-    ballpark_att=64, cabled=False)
+    ballpark_att_db=16.0, cabled=False)
 
 NUMERIC = dict(pad_db=(0.0, 200.0), freq=(144.02, 147.98), tone=(100, 2400),
-               dev=(100, 10000), repeat=(1, 100), ballpark_att=(0, 127))
-INTEGER = {"tone", "dev", "repeat", "ballpark_att"}
+               dev=(100, 10000), repeat=(1, 100), ballpark_att_db=(0.0, 31.75))
+INTEGER = {"tone", "dev", "repeat"}
+QUARTER_DB = {"ballpark_att_db"}      # the attenuator's 0.25 dB steps
 
 
 class CommandError(ValueError):
@@ -203,6 +204,8 @@ class Engine:
                     except (TypeError, ValueError):
                         raise CommandError(f"{k}: {v!r} is not a number")
                     lo, hi = NUMERIC[k]
+                    if k in QUARTER_DB:
+                        v = round(v * 4) / 4
                     if not (lo <= v <= hi) or (k in INTEGER and v != int(v)):
                         raise CommandError(f"{k} must be {'a whole number ' if k in INTEGER else ''}"
                                            f"from {lo:g} to {hi:g}")
@@ -240,9 +243,9 @@ class Engine:
                 raise CommandError("connect the PicoFox first")
             if not self.setup["call"] and not self.setup["cabled"]:
                 raise CommandError("enter a callsign, or use cabled mode")
-        if mode == "sweep" and self.setup["pad_db"] is None:
-            raise CommandError("enter the total external attenuation (pad) first; "
-                               "Ballpark helps find it")
+        if mode == "sweep" and self.setup["cabled"] and self.setup["pad_db"] is None:
+            raise CommandError("enter the total external attenuation first: a cabled sweep "
+                               "reports the level at the radio. Ballpark helps find it.")
         self.stop_evt.clear()
         self.mode = mode
         self.worker = threading.Thread(target=self._run_mode, args=(mode,), daemon=True)
@@ -266,7 +269,7 @@ class Engine:
             raise CommandError("only the attenuator can change during ballpark")
         fox = self.fox
         if action == "att":
-            fox.set_att(_whole(value, 0, 127, "ATT"))
+            fox.set_att(round(_number(value, 0, 31.75, "attenuation (dB)") * 4))
         elif action == "freq":
             fox.set_freq(_number(value, 144.02, 147.98, "frequency"))
             self.setup["freq"] = float(value)
@@ -328,6 +331,13 @@ class Engine:
         mon = pick_monitor("default", dev) if self.setup["monitor"] else None
         return SinadAnalyzer(dev, monitor=mon), f"audio device {dev}"
 
+    def _level(self, out_dbm):
+        """The level for a PicoFox output, and what it means (radio, antenna
+        or output; see sweep.level_reference)."""
+        pad = self.setup["pad_db"] or 0.0
+        ref = level_reference(self.setup["cabled"], pad)[0]
+        return round(out_dbm - pad, 2), ref
+
     def _reading_event(self, r, **extra):
         self.emit("reading", sinad_db=round(r.sinad_db, 2), std_db=round(r.std_db, 3),
                   peak_dbfs=round(peak_dbfs(r.peak), 1), clipped=r.peak >= CLIP_LEVEL,
@@ -358,7 +368,7 @@ class Engine:
         s = self.setup
         quick = s["quick"]
         return argparse.Namespace(
-            pad_db=s["pad_db"], label="run", session=s["session"], radio=s["radio"],
+            pad_db=s["pad_db"] or 0.0, label="run", session=s["session"], radio=s["radio"],
             condition=s["condition"], note=s["note"], call=s["call"], cabled=s["cabled"],
             freq=s["freq"], tone=s["tone"], dev=s["dev"],
             settle=0.5 if quick else 1.0, avg_coarse=0.75 if quick else 1.0,
@@ -376,15 +386,17 @@ class Engine:
                 args = self._sweep_args(af_input)
                 res = sweep.run(
                     args, fox=self.fox, an=an,
-                    on_start=lambda label: self.emit("run_started", label=label, index=i, of=n,
-                                                     pad_db=args.pad_db),
+                    on_start=lambda label: self.emit(
+                        "run_started", label=label, index=i, of=n, pad_db=args.pad_db,
+                        level_ref=level_reference(args.cabled, args.pad_db)[0]),
                     on_point=lambda row: self.emit("point", **_jsonable(row)),
                     log=self.log, stop=self.stop_evt)
                 out = dict(label=res.label, csv=str(res.csv), png=str(res.csv.with_suffix(".png")),
                            point_dbm=_round(res.point_dbm, 2), sigma_db=_round(res.sigma_db, 3),
                            fit_points=res.fit_points, index=i, of=n,
                            radio=self.setup["radio"], condition=self.setup["condition"],
-                           session=self.setup["session"], pad_db=args.pad_db)
+                           session=self.setup["session"], pad_db=args.pad_db,
+                           level_ref=res.level_ref)
                 self.results.append(out)
                 self.emit("run_finished", **out)
 
@@ -395,16 +407,17 @@ class Engine:
         with an:
             self._prepare_rf()
             fox.set_freq(s["freq"])
-            fox.set_att(s["ballpark_att"])
+            fox.set_att(round(s["ballpark_att_db"] * 4))
             fox.tone(s["tone"], s["dev"])
             self._poll_once()
             while not self.stop_evt.is_set():
                 r = read_clean(fox, an, settle_s=0.0, avg_s=1.0, log=self.log)
                 att = int(fox.status()["att"])
                 out = self.cal.dbm(att)
-                lvl = None if s["pad_db"] is None else round(out - s["pad_db"], 2)
-                self._reading_event(r, hint=hint(r, stop="press Stop"), att=att, out_dbm=round(out, 2),
-                                    level_dbm=lvl)
+                lvl, ref = self._level(out)
+                self._reading_event(r, hint=hint(r, stop="press Stop"), att=att,
+                                    att_db=att * 0.25, out_dbm=round(out, 2),
+                                    level_dbm=lvl, level_ref=ref)
         raise Stopped()
 
     def _mode_meter(self):
@@ -434,9 +447,9 @@ class Engine:
             self.emit("fox_event", text=ev)
         st = dict(st)
         att = int(st.get("att", 127))
+        st["att_db"] = att * 0.25
         st["out_dbm"] = round(self.cal.dbm(att), 2)
-        if self.setup["pad_db"] is not None:
-            st["level_dbm"] = round(st["out_dbm"] - self.setup["pad_db"], 2)
+        st["level_dbm"], st["level_ref"] = self._level(st["out_dbm"])
         ids = [e for e in self._fox_raw.events if e.startswith("*ID")]
         st["id_active"] = bool(ids) and ids[-1].startswith("*ID START")
         if st.get("mode") != "OFF" and st.get("cabled") != "1":

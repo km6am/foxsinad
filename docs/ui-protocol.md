@@ -30,13 +30,20 @@ Commands that change the PicoFox reply once the change has been made.
 | `confirm_cabled` | `confirmed`: bool | the operator's confirmation that the output goes only into a load or test equipment; lasts for this engine session. `false` also leaves cabled mode (idle only). |
 | `start` | `mode`: `sweep`, `ballpark`, `meter` | starts a mode. Idle only. Sweep and ballpark need a connected PicoFox and a callsign or cabled mode; sweep also needs `pad_db`. |
 | `stop` | | ends the running mode; RF off. When idle, turns RF off if it's on. |
-| `fox` | `action`, `value`, `dev` | manual control: `att` (value 0–127), `freq` (MHz), `tone` (value = tone Hz, dev = Hz), `carrier`, `off`, `abort` (off, no ID), `id`. Refused during a sweep; only `att` during ballpark. |
+| `fox` | `action`, `value`, `dev` | manual control: `att` (value in dB, 0–31.75, rounded to 0.25), `freq` (MHz), `tone` (value = tone Hz, dev = Hz), `carrier`, `off`, `abort` (off, no ID), `id`. Refused during a sweep; only `att` during ballpark. |
 
 **Setup fields** (`state.setup`): `radio`, `condition`, `session`, `note`
 (text); `pad_db` (0–200, or empty), `freq` (144.02–147.98 MHz), `tone`
-(100–2400 Hz), `dev` (100–10000 Hz), `repeat` (1–100), `ballpark_att`
-(0–127); `quick`, `monitor`, `cabled` (bool). `cabled: true` needs
-`confirm_cabled` first, and can only change while idle with RF off.
+(100–2400 Hz), `dev` (100–10000 Hz), `repeat` (1–100), `ballpark_att_db`
+(0–31.75 dB, rounded to 0.25); `quick`, `monitor`, `cabled` (bool).
+`cabled: true` needs `confirm_cabled` first, and can only change while
+idle with RF off. `pad_db` is required for a cabled sweep only.
+
+**Levels.** Every level comes with `level_ref`, saying what it is:
+`radio` (cabled: the level at the radio, output minus `pad_db`),
+`antenna` (over the air with `pad_db` set: into the transmit antenna) or
+`output` (over the air: the PicoFox output). Over the air the path loss
+isn't known, so the level at the radio is never claimed.
 
 ## Events
 
@@ -47,10 +54,10 @@ Every event has `event` and `t` (Unix time, seconds).
 | `snapshot` | `state`, `status`, `results`, `cal` | first event on every connection |
 | `state` | `state` | mode, connection or setup changed |
 | `status` | `status` (or null) | PicoFox state, about once a second |
-| `run_started` | `label`, `index`, `of`, `pad_db` | a sweep begins (`index` of `of` repeats) |
+| `run_started` | `label`, `index`, `of`, `pad_db`, `level_ref` | a sweep begins (`index` of `of` repeats) |
 | `point` | `phase` (`coarse`/`fine`), `att`, `gen_dbm`, `level_dbm`, `level_uv`, `sinad_db`, `sinad_sd`, `n`, `n_discarded`, `time`, `clipped` | one sweep reading |
-| `run_finished` | `label`, `csv`, `png`, `point_dbm`, `sigma_db`, `fit_points`, `index`, `of`, `radio`, `condition`, `session`, `pad_db` | a sweep's result (`point_dbm` null if no 12 dB crossing) |
-| `reading` | `sinad_db`, `std_db`, `peak_dbfs`, `clipped`, `under_range`, `n_discarded`; ballpark adds `hint`, `att`, `out_dbm`, `level_dbm` | one 1 s reading in meter or ballpark |
+| `run_finished` | `label`, `csv`, `png`, `point_dbm`, `sigma_db`, `fit_points`, `index`, `of`, `radio`, `condition`, `session`, `pad_db`, `level_ref` | a sweep's result (`point_dbm` null if no 12 dB crossing) |
+| `reading` | `sinad_db`, `std_db`, `peak_dbfs`, `clipped`, `under_range`, `n_discarded`; ballpark adds `hint`, `att` (steps), `att_db`, `out_dbm`, `level_dbm`, `level_ref` | one 1 s reading in meter or ballpark |
 | `fox_event` | `text` (`*ID START`, `*ID DONE`) | a Morse ID started or ended |
 | `log` | `level` (`info`, `warn`, `error`), `msg` | anything worth showing |
 
@@ -60,8 +67,9 @@ Every event has `event` and `t` (Unix time, seconds).
 
 **`status`**: the driver's fields as strings (`mode` OFF/CARRIER/TONE,
 `freq` MHz, `att` steps, `tone`, `dev`, `call`, `rev`, `since_id`, `up`,
-`cabled`, `id_active`), plus `out_dbm` (from the cal table), `level_dbm`
-(when `pad_db` is set) and `next_id_s` (while transmitting, not cabled).
+`cabled`, `id_active`), plus `att_db`, `out_dbm` (from the cal table),
+`level_dbm` with `level_ref`, and `next_id_s` (while transmitting, not
+cabled).
 
 **`cal`**: `freq_mhz`, `date`, and the cal table as `att` / `dbm` arrays,
 so the UI can show levels for an attenuator setting before sending it.
