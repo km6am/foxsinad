@@ -2,7 +2,7 @@
 
 > **Superseded:** the maintained firmware, with full API docs, theory, a
 > flashing tool and a host driver, is now the standalone repo
-> `~/foxsinad-firmware` (v0.2.0, prepared for public release). This copy
+> `~/foxsinad-firmware`, published at https://github.com/km6am/foxsinad-firmware (v0.2.0). This copy
 > is the 0.1.0 pre-release kept for history. Make changes there.
 
 A stateless fork of [PicoFox-Firmware](https://github.com/ai6ym/PicoFox)
