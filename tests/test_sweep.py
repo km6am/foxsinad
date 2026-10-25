@@ -85,7 +85,7 @@ def test_finds_the_12db_point():
         device=None, port=None, cal=str(sweep.DEFAULT_CAL), monitor=None, tail_db=3.0)
     an = StubAnalyzer(None)
     sweep.SinadAnalyzer = lambda device, **kw: an
-    point = sweep.run(args)
+    point = sweep.run(args).point_dbm
     assert point is not None and abs(point - TRUE_12DB_DBM) < 0.3, point
     rows = [l for l in (sweep.RUNS / "run_stub_bench_145.55MHz.csv").read_text().splitlines()
             if l.startswith(("coarse", "fine"))]

@@ -26,11 +26,13 @@ during the run, so an interrupted run keeps its data.
 """
 
 import argparse
+import contextlib
 import csv
 import json
 import math
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -43,6 +45,23 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CAL = ROOT / "cal" / "picofox_r3_attcal.json"
 RUNS = ROOT / "runs"
 TARGET_DB = 12.0
+
+
+class SweepError(RuntimeError):
+    """The sweep can't go on; the message says what to change."""
+
+
+class Stopped(Exception):
+    """A stop was requested (the RF is turned off on the way out)."""
+
+
+@dataclass
+class Result:
+    label: str
+    csv: Path
+    point_dbm: float = None     # 12 dB SINAD level at the radio, or None
+    sigma_db: float = None      # the fit's statistical uncertainty
+    fit_points: int = None
 
 
 class CalTable:
@@ -135,13 +154,17 @@ def _id_in_progress(events):
     return bool(ids) and ids[-1].startswith("*ID START")
 
 
-def read_clean(fox, an, settle_s, avg_s):
+def _say(msg):
+    print(msg, flush=True)
+
+
+def read_clean(fox, an, settle_s, avg_s, log=_say):
     """One analyzer reading that didn't overlap a Morse ID. The PicoFox
     reports IDs as *ID START / *ID DONE events; STATUS collects them."""
     while True:
         fox.status()
         if _id_in_progress(fox.events):
-            print("  (waiting for a Morse ID to finish)", flush=True)
+            log("  (waiting for a Morse ID to finish)")
             while _id_in_progress(fox.events):
                 time.sleep(0.5)
                 fox.status()
@@ -150,30 +173,37 @@ def read_clean(fox, an, settle_s, avg_s):
         fox.status()
         if not any(e.startswith("*ID") for e in fox.events[before:]):
             return r
-        print("  (Morse ID during this reading; measuring again)", flush=True)
+        log("  (Morse ID during this reading; measuring again)")
 
 
-def run(args):
+def run_stem(args, runs=None):
+    """File stem for the next run, named as hp8935_sinad_serial's run.py: a
+    session is a folder holding <radio>_<condition>_<freq>; otherwise
+    <label>_<radio>_<condition>_<freq>. Never an existing name."""
+    runs = Path(runs or RUNS)
+    runs.mkdir(parents=True, exist_ok=True)
+    if args.session:
+        folder = runs / slug(args.session)
+        folder.mkdir(exist_ok=True)
+        return unique_label(str(folder / compose_label(args.radio, args.condition,
+                                                       freq_tag(args.freq))))
+    return unique_label(str(runs / compose_label(args.label, args.radio, args.condition,
+                                                 freq_tag(args.freq))))
+
+
+def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=None):
+    """One sweep. Opens the PicoFox and the analyzer unless they're passed
+    in. on_start(label) and on_point(row) report progress; stop (an Event)
+    ends the run early with Stopped. Raises SweepError for problems the user
+    has to fix. RF is always off at the end."""
     cal = CalTable(args.cal)
     if abs(cal.freq_mhz - args.freq) > 1.0:
-        print(f"warning: the cal table was measured at {cal.freq_mhz} MHz, "
-              f"you're sweeping at {args.freq} MHz")
-    dev = pick_device(args.device)
-    want = getattr(args, "monitor", False) or getattr(args, "monitor_device", None)
-    mon = pick_monitor(getattr(args, "monitor_device", None) or "default", dev) if want else None
-
-    # Naming as hp8935_sinad_serial's run.py: a session is a folder named after
-    # it, holding <radio>_<condition>_<freq>; otherwise <label>_<radio>_...
-    RUNS.mkdir(exist_ok=True)
-    if args.session:
-        folder = RUNS / slug(args.session)
-        folder.mkdir(exist_ok=True)
-        stem = unique_label(str(folder / compose_label(args.radio, args.condition,
-                                                       freq_tag(args.freq))))
-    else:
-        stem = unique_label(str(RUNS / compose_label(args.label, args.radio, args.condition,
-                                                     freq_tag(args.freq))))
+        log(f"warning: the cal table was measured at {cal.freq_mhz} MHz, "
+            f"you're sweeping at {args.freq} MHz")
+    stem = run_stem(args, getattr(args, "runs_dir", None))
     label = Path(stem).name
+    if on_start:
+        on_start(label)
     partial = Path(f"{stem}.partial.csv")
     final = Path(f"{stem}.csv")
     columns = ["phase", "gen_dbm", "level_dbm", "level_uv", "sinad_db", "sinad_sd", "n",
@@ -181,35 +211,47 @@ def run(args):
     started = datetime.now()
 
     rows = []
+    cabled = getattr(args, "cabled", False)
+    dev = None
     live = LivePlot(f"{label}  (pad {args.pad_db:g} dB)") if getattr(args, "live", False) else None
-    with PicoFox(args.port) as fox, SinadAnalyzer(dev, monitor=mon) as an:
-        print("PicoFox:", fox.hello())
-        cabled = getattr(args, "cabled", False)
-        set_cabled(fox, cabled)
-        fox.set_call(args.call)
-        fox.set_freq(args.freq)
-        fox.set_att(0)
+    with contextlib.ExitStack() as opened:
+        if fox is None:
+            fox = opened.enter_context(PicoFox(args.port))
+        if an is None:
+            dev = pick_device(args.device)
+            want = getattr(args, "monitor", False) or getattr(args, "monitor_device", None)
+            mon = pick_monitor(getattr(args, "monitor_device", None) or "default", dev) \
+                if want else None
+            an = opened.enter_context(SinadAnalyzer(dev, monitor=mon))
+        log(f"PicoFox: {fox.hello()}")
         try:
+            set_cabled(fox, cabled)
+            if args.call:
+                fox.set_call(args.call)
+            fox.set_freq(args.freq)
+            fox.set_att(0)
             fox.tone(args.tone, args.dev)
-            r = read_clean(fox, an, 1.5, 1.0)
+            r = read_clean(fox, an, 1.5, 1.0, log)
             top = cal.dbm(0) - args.pad_db
             if r.peak >= CLIP_LEVEL:
-                sys.exit("error: the audio clips at full level. Turn the radio's volume down "
-                         "(audiocheck level) and run again.")
+                raise SweepError("the audio clips at full level. Turn the radio's volume down "
+                                 "(audiocheck level) and run again.")
             if r.under_range:
-                sys.exit("error: no audio. Check the cable, the LINE switch, the radio's "
-                         "volume, and that its squelch is open.")
+                raise SweepError("no audio. Check the cable, the LINE switch, the radio's "
+                                 "volume, and that its squelch is open.")
             if r.sinad_db < TARGET_DB:
-                sys.exit(f"error: SINAD is only {r.sinad_db:.1f} dB at full level "
-                         f"({top:.1f} dBm at the radio). Use less fixed attenuation.")
+                raise SweepError(f"SINAD is only {r.sinad_db:.1f} dB at full level "
+                                 f"({top:.1f} dBm at the radio). Use less fixed attenuation.")
 
             with open(partial, "w", newline="") as fh:
                 w = csv.writer(fh)
                 w.writerow(columns)
 
                 def measure(phase, att, avg):
+                    if stop is not None and stop.is_set():
+                        raise Stopped()
                     fox.set_att(att)
-                    r = read_clean(fox, an, args.settle, avg)
+                    r = read_clean(fox, an, args.settle, avg, log)
                     gen = cal.dbm(att)
                     lvl = gen - args.pad_db
                     row = [phase, round(gen, 2), round(lvl, 2), round(dbm_to_uv(lvl), 4),
@@ -219,12 +261,14 @@ def run(args):
                     rows.append(dict(zip(columns, row)))
                     if live:
                         live.add(phase, lvl, r.sinad_db)
+                    if on_point:
+                        on_point(dict(rows[-1], clipped=r.peak >= CLIP_LEVEL))
                     w.writerow(row)
                     fh.flush()
                     flags = (" CLIP" if r.peak >= CLIP_LEVEL else "") + \
                             (f" ({r.n_discarded} windows discarded)" if r.n_discarded else "")
-                    print(f"{phase:6s} ATT {att:3d}  {lvl:8.2f} dBm  SINAD {r.sinad_db:5.1f} dB "
-                          f"(sd {r.std_db:.2f}){flags}", flush=True)
+                    log(f"{phase:6s} ATT {att:3d}  {lvl:8.2f} dBm  SINAD {r.sinad_db:5.1f} dB "
+                        f"(sd {r.std_db:.2f}){flags}")
                     return r.sinad_db
 
                 # coarse: 2 dB steps on down into the tail, until SINAD is at
@@ -239,7 +283,7 @@ def run(args):
                 above = [r["att"] for r in coarse if r["sinad_db"] >= TARGET_DB]
                 below = [r["att"] for r in coarse if r["sinad_db"] < TARGET_DB]
                 if not below:
-                    sys.exit(f"SINAD is still above {TARGET_DB:g} dB at ATT 127 "
+                    raise SweepError(f"SINAD is still above {TARGET_DB:g} dB at ATT 127 "
                              f"({cal.dbm(127) - args.pad_db:.1f} dBm at the radio). "
                              "Add more fixed attenuation and run again. "
                              f"(Readings so far: {partial})")
@@ -254,6 +298,8 @@ def run(args):
             fox.off()
             fox.set_att(127)
             set_cabled(fox, False)
+            if live and not rows:
+                live.plt.close(live.fig)
 
     fine = [r for r in rows if r["phase"] == "fine"]
     fit = twelve_db_fit([r["level_dbm"] for r in fine], [r["sinad_db"] for r in fine])
@@ -270,7 +316,7 @@ def run(args):
         station_call=(args.call or "").upper() or "(not set)",
         cabled="yes (no Morse ID)" if cabled else "no",
         session=args.session or "(none)",
-        af_input=f"audio device {dev}", af_filter1="200Hz HPF (software)",
+        af_input=getattr(args, "af_input", None) or f"audio device {dev}", af_filter1="200Hz HPF (software)",
         af_filter2="3kHz LPF (software)", af_deemphasis="(radio's own)",
         af_detector="SINAD from FFT residual (sinad_meter)",
         cal_table=f"{cal.path.name} ({cal.date}, {cal.freq_mhz} MHz)",
@@ -284,20 +330,20 @@ def run(args):
         fh.write(partial.read_text())
     partial.unlink()
 
-    print(f"\nSaved {final}")
+    log(f"\nSaved {final}")
     if point is None:
-        print("No clean 12 dB crossing in the fine sweep; see the CSV.")
+        log("No clean 12 dB crossing in the fine sweep; see the CSV.")
     else:
         pm = "" if sigma is None else f" +/- {sigma:.2f}"
-        print(f"  => {TARGET_DB:g} dB SINAD at {point:.2f} dBm{pm}   "
-              f"({dbm_to_uv(point):.3f} uV) at the radio input")
+        log(f"  => {TARGET_DB:g} dB SINAD at {point:.2f} dBm{pm}   "
+            f"({dbm_to_uv(point):.3f} uV) at the radio input")
         if sigma is not None:
-            print(f"     +/- is the fit's statistical uncertainty ({npts} points); it "
-                  "excludes the cal table and --pad-db.")
-    plot(final, rows, point)
+            log(f"     +/- is the fit's statistical uncertainty ({npts} points); it "
+                "excludes the cal table and --pad-db.")
+    plot(final, rows, point, log)
     if live:
         live.finish(point, hold_s=None if getattr(args, "hold", False) else 3.0)
-    return point
+    return Result(label, final, point, sigma, npts)
 
 
 class LivePlot:
@@ -346,7 +392,7 @@ class LivePlot:
             self.plt.close(self.fig)
 
 
-def plot(path, rows, point):
+def plot(path, rows, point, log=_say):
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 
@@ -370,7 +416,7 @@ def plot(path, rows, point):
     fig.tight_layout()
     png = path.with_suffix(".png")
     fig.savefig(png, dpi=150)
-    print(f"wrote {png}")
+    log(f"wrote {png}")
 
 
 def main():
@@ -420,7 +466,7 @@ def main():
             if args.repeat > 1:
                 print(f"\n=== run {i} of {args.repeat}, {datetime.now().strftime('%H:%M:%S')}")
             run(args)
-    except (LookupError, PicoFoxError) as e:
+    except (LookupError, PicoFoxError, SweepError) as e:
         sys.exit(f"error: {e}")
     except KeyboardInterrupt:
         sys.exit("\nstopped (RF was turned off)")
