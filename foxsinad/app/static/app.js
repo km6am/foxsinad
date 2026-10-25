@@ -1,0 +1,601 @@
+// foxsinad UI. Talks to the measurement engine only through `transport`,
+// so the same page runs on the desktop (HTTP + server-sent events) and,
+// later, in an Android WebView (a JavaScript bridge object). Messages are
+// specified in docs/ui-protocol.md.
+"use strict";
+
+// ---- transport -------------------------------------------------------------
+function httpTransport() {
+  let onEvent = () => {}, onLink = () => {};
+  const es = new EventSource("/events");
+  es.onopen = () => onLink(true);
+  es.onerror = () => onLink(false);
+  es.onmessage = (m) => onEvent(JSON.parse(m.data));
+  return {
+    send: (cmd) => fetch("/cmd", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(cmd),
+    }).then((r) => r.json()).catch((e) => ({ok: false, error: `no reply from the engine (${e.message})`})),
+    events: (fn) => { onEvent = fn; },
+    link: (fn) => { onLink = fn; },
+  };
+}
+
+// Android: the app injects window.FoxsinadBridge with send(json) -> json, and
+// calls window.foxsinadEvent(json) for each event.
+function bridgeTransport(bridge) {
+  let onEvent = () => {};
+  window.foxsinadEvent = (json) => onEvent(JSON.parse(json));
+  return {
+    send: (cmd) => Promise.resolve(JSON.parse(bridge.send(JSON.stringify(cmd)))),
+    events: (fn) => { onEvent = fn; },
+    link: (fn) => fn(true),
+  };
+}
+
+const transport = window.FoxsinadBridge ? bridgeTransport(window.FoxsinadBridge) : httpTransport();
+
+// ---- state -----------------------------------------------------------------
+const S = {
+  state: null,          // engine state: mode, connected, setup, ...
+  status: null,         // PicoFox status
+  cal: null,            // {att: [...], dbm: [...]}
+  results: [],          // finished sweeps this engine session
+  run: null,            // current sweep: {label, index, of, points: [], mark}
+  prevRuns: [],         // earlier sweeps' points, drawn faint
+  readings: [],         // [{t, sinad, ...}] for meter and ballpark
+  log: [],
+  foxEvents: [],
+  selectedMode: loadPref("mode", "sweep"),
+  linkOk: false,
+};
+const TIME_WINDOW_S = 120;
+const TARGET_DB = 12;
+
+function loadPref(k, dflt) {
+  try { return localStorage.getItem(`foxsinad.${k}`) || dflt; } catch { return dflt; }
+}
+function savePref(k, v) {
+  try { localStorage.setItem(`foxsinad.${k}`, v); } catch { /* private window */ }
+}
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(+v)) ? "–" : (+v).toFixed(d).replace("-", "−");
+const running = () => S.state && S.state.mode !== "idle";
+const plotMode = () => (running() ? S.state.mode : S.selectedMode);
+
+function calDbm(att) {
+  const c = S.cal;
+  if (!c || !c.att.length) return null;
+  if (att <= c.att[0]) return c.dbm[0];
+  for (let i = 1; i < c.att.length; i++) {
+    if (att <= c.att[i]) {
+      const f = (att - c.att[i - 1]) / (c.att[i] - c.att[i - 1]);
+      return c.dbm[i - 1] + f * (c.dbm[i] - c.dbm[i - 1]);
+    }
+  }
+  return c.dbm[c.dbm.length - 1];
+}
+
+async function send(cmd) {
+  const reply = await transport.send(cmd);
+  if (!reply.ok) toast(reply.error);
+  return reply;
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 6000);
+}
+
+// ---- events from the engine -------------------------------------------------
+transport.link((ok) => {
+  S.linkOk = ok;
+  $("link").textContent = ok ? "engine connected" : "engine not reachable";
+  $("link").className = `link ${ok ? "ok" : "bad"}`;
+  $("linkBanner").hidden = ok;
+});
+
+transport.events((ev) => {
+  switch (ev.event) {
+    case "snapshot":
+      S.state = ev.state; S.status = ev.status; S.cal = ev.cal; S.results = ev.results || [];
+      renderAll();
+      break;
+    case "state":
+      S.state = ev.state;
+      renderHeader(); renderSetup(); renderStatus(); renderManual(); draw();
+      break;
+    case "status":
+      S.status = ev.status;
+      renderStatus(); renderManual(); renderSetup();
+      break;
+    case "run_started":
+      if (S.run && S.run.points.length) S.prevRuns.push(S.run.points);
+      S.prevRuns = S.prevRuns.slice(-20);
+      S.run = {label: ev.label, index: ev.index, of: ev.of, points: [], mark: null};
+      renderReadout(); draw();
+      break;
+    case "point":
+      if (!S.run) S.run = {label: "", index: 1, of: 1, points: [], mark: null};
+      S.run.points.push({phase: ev.phase, level: ev.level_dbm, sinad: ev.sinad_db,
+                         sd: ev.sinad_sd, att: ev.att});
+      renderReadout(); draw();
+      break;
+    case "run_finished":
+      S.results.push(ev);
+      if (S.run) S.run.mark = ev.point_dbm;
+      renderResults(); renderReadout(); draw();
+      break;
+    case "reading":
+      S.readings.push({t: ev.t, sinad: ev.sinad_db, hint: ev.hint, level: ev.level_dbm,
+                       att: ev.att, clipped: ev.clipped, under: ev.under_range, mode: plotMode()});
+      S.readings = S.readings.filter((r) => ev.t - r.t <= TIME_WINDOW_S + 5);
+      renderReadout(); draw();
+      break;
+    case "fox_event":
+      S.foxEvents.unshift({t: ev.t, text: ev.text});
+      S.foxEvents = S.foxEvents.slice(0, 30);
+      renderFoxEvents();
+      break;
+    case "log":
+      S.log.push({t: ev.t, level: ev.level, msg: ev.msg});
+      S.log = S.log.slice(-300);
+      renderLog();
+      break;
+  }
+});
+
+// ---- header -----------------------------------------------------------------
+document.querySelectorAll(".seg").forEach((b) => b.addEventListener("click", () => {
+  if (running()) return;
+  S.selectedMode = b.dataset.mode;
+  savePref("mode", S.selectedMode);
+  renderHeader(); renderReadout(); draw();
+}));
+$("startBtn").addEventListener("click", () => {
+  if (S.selectedMode !== "sweep") S.readings = [];
+  send({cmd: "start", mode: S.selectedMode});
+});
+$("stopBtn").addEventListener("click", () => send({cmd: "stop"}));
+
+const MODE_HELP = {
+  sweep: "Steps the PicoFox down through its range and finds the 12 dB SINAD point. "
+       + "Needs the external attenuation, and the radio's squelch open.",
+  ballpark: "Transmits at the Ballpark ATT setting and shows SINAD live. Turn the step "
+          + "attenuator until it reads about 12 dB, Stop, then enter the total external "
+          + "attenuation.",
+  meter: "Shows the radio's SINAD live without controlling the PicoFox.",
+};
+
+function renderHeader() {
+  const st = S.state;
+  const mode = plotMode();
+  document.querySelectorAll(".seg").forEach((b) => {
+    b.setAttribute("aria-checked", String(b.dataset.mode === mode));
+    b.disabled = running() && b.dataset.mode !== mode;
+  });
+  $("simBadge").hidden = !(st && st.sim);
+  $("startBtn").disabled = !st || running();
+  const rfOn = S.status && S.status.mode && S.status.mode !== "OFF";
+  $("stopBtn").disabled = !st || !(running() || rfOn);
+  $("runState").textContent = !st ? "" : running()
+    ? `${st.mode[0].toUpperCase()}${st.mode.slice(1)} running` : "Idle";
+  $("cabledBanner").hidden = !(st && st.setup.cabled);
+  $("modeHelp").textContent = MODE_HELP[mode];
+  $("plotTitle").textContent = mode === "sweep" ? "SINAD vs level at the radio" : "SINAD over time";
+}
+
+// ---- run setup -------------------------------------------------------------------
+const FIELDS = [
+  {k: "radio", label: "Radio", type: "text"},
+  {k: "condition", label: "Condition", type: "text", hint: "bench, antenna, summit …"},
+  {k: "session", label: "Session", type: "text", hint: "runs are grouped in a folder of this name"},
+  {k: "note", label: "Note", type: "text"},
+  {sep: true},
+  {k: "pad_db", label: "External attenuation", unit: "dB", type: "number", step: "0.1",
+   hint: "step attenuator + pads + cables, total"},
+  {k: "call", label: "Callsign", type: "text"},
+  {k: "freq", label: "Frequency", unit: "MHz", type: "number", step: "0.005"},
+  {k: "tone", label: "Tone", unit: "Hz", type: "number", step: "1"},
+  {k: "dev", label: "Deviation", unit: "Hz, commanded", type: "number", step: "100"},
+  {sep: true},
+  {k: "repeat", label: "Repeat", unit: "sweeps", type: "number", step: "1"},
+  {k: "ballpark_att", label: "Ballpark ATT", unit: "steps of 0.25 dB", type: "number", step: "1"},
+  {k: "quick", label: "Quick sweep (shorter readings)", type: "checkbox"},
+  {k: "monitor", label: "Play the audio on the speakers", type: "checkbox"},
+  {k: "cabled", label: "Cabled: no Morse ID", type: "checkbox"},
+];
+
+function buildSetup() {
+  const form = $("setup");
+  for (const f of FIELDS) {
+    if (f.sep) { form.insertAdjacentHTML("beforeend", '<hr class="sep">'); continue; }
+    const id = `f_${f.k}`;
+    const html = f.type === "checkbox"
+      ? `<label class="field check" id="w_${f.k}"><input type="checkbox" id="${id}" aria-label="${esc(f.label)}"><span>${esc(f.label)}</span></label>`
+      : `<label class="field" id="w_${f.k}"><span>${esc(f.label)}${f.unit ? ` <span class="unit">(${esc(f.unit)})</span>` : ""}</span>
+           <input type="${f.type}" id="${id}" aria-label="${esc(f.label)}" ${f.step ? `step="${f.step}"` : ""} inputmode="${f.type === "number" ? "decimal" : "text"}">
+           ${f.hint ? `<span class="hint">${esc(f.hint)}</span>` : ""}<span class="err" hidden></span></label>`;
+    form.insertAdjacentHTML("beforeend", html);
+    const input = $(id);
+    input.addEventListener("change", () => onFieldChange(f, input));
+  }
+  form.addEventListener("submit", (e) => e.preventDefault());
+}
+
+async function onFieldChange(f, input) {
+  const wrap = $(`w_${f.k}`);
+  const err = wrap.querySelector(".err");
+  if (f.k === "cabled" && input.checked && !S.state.cabled_confirmed) {
+    input.checked = false;
+    const ok = await askCabled();
+    if (!ok) return;
+    const r = await send({cmd: "confirm_cabled", confirmed: true});
+    if (!r.ok) return;
+    input.checked = true;
+  }
+  const value = f.type === "checkbox" ? input.checked : input.value;
+  const r = await send({cmd: "setup", [f.k]: value});
+  wrap.classList.toggle("invalid", !r.ok);
+  if (err) { err.hidden = r.ok; err.textContent = r.ok ? "" : r.error; }
+  if (!r.ok) renderSetup(true);
+}
+
+function askCabled() {
+  const d = $("cabledDialog");
+  return new Promise((resolve) => {
+    d.addEventListener("close", () => resolve(d.returnValue === "ok"), {once: true});
+    d.returnValue = "";
+    d.showModal();
+  });
+}
+
+function renderSetup(force = false) {
+  if (!S.state) return;
+  const s = S.state.setup;
+  for (const f of FIELDS) {
+    if (f.sep) continue;
+    const input = $(`f_${f.k}`);
+    if (!force && input === document.activeElement) continue;
+    if (f.type === "checkbox") input.checked = !!s[f.k];
+    else input.value = s[f.k] ?? "";
+    input.disabled = running() || (f.k === "cabled" && S.status && S.status.mode !== "OFF");
+  }
+}
+
+// ---- PicoFox status ------------------------------------------------------------
+$("connectBtn").addEventListener("click", () =>
+  send({cmd: S.state && S.state.connected ? "disconnect" : "connect"}));
+
+function mmss(s) {
+  s = Math.max(0, Math.round(s));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function renderStatus() {
+  const st = S.state, f = S.status;
+  const btn = $("connectBtn");
+  btn.textContent = st && st.connected ? "Disconnect" : "Connect";
+  btn.disabled = !st || running();
+  const dl = $("foxStatus");
+  if (!st || !st.connected || !f) {
+    dl.innerHTML = `<dt>State</dt><dd class="muted">not connected</dd>`;
+    renderHeader();
+    return;
+  }
+  const att = +f.att;
+  const out = f.out_dbm, lvl = f.level_dbm;
+  const on = f.mode !== "OFF";
+  const outChip = !on ? `<span class="chip off">OFF</span>`
+    : f.cabled === "1" ? `<span class="chip cabled">${esc(f.mode)} · cabled</span>`
+    : `<span class="chip on">${esc(f.mode)} · on air</span>`;
+  let id = "";
+  if (f.id_active === "1" || f.id_active === true) id = `<span class="chip id">sending ID</span>`;
+  else if (on && f.cabled !== "1") id = `next in ${mmss(f.next_id_s ?? 0)} <span class="muted">(last ${mmss(+f.since_id)} ago)</span>`;
+  else if (on) id = `<span class="muted">none (cabled)</span>`;
+  else id = `<span class="muted">—</span>`;
+  const rows = [
+    ["Output", outChip],
+    ["Frequency", `${(+f.freq).toFixed(4)} MHz`],
+    ["Attenuator", Number.isNaN(att) ? "–" : `ATT ${att} · ${(att * 0.25).toFixed(2)} dB`],
+    ["PicoFox out", out === undefined ? "–" : `${fmt(out, 1)} dBm`],
+    ["At the radio", lvl === undefined ? `<span class="muted">enter the external attenuation</span>` : `${fmt(lvl, 1)} dBm`],
+    ["Tone", on && f.mode === "TONE" ? `${esc(f.tone)} Hz · ${esc(f.dev)} Hz dev` : `<span class="muted">${esc(f.tone)} Hz · ${esc(f.dev)} Hz dev (set)</span>`],
+    ["Callsign", esc(f.call)],
+    ["Morse ID", id],
+    ["Firmware", `<span class="muted">${esc(st.hello)}</span>`],
+    ["Port", `<span class="muted">${esc(st.port)}</span>`],
+  ];
+  dl.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  renderHeader();
+}
+
+function renderFoxEvents() {
+  const ul = $("foxEvents");
+  ul.innerHTML = S.foxEvents.length
+    ? S.foxEvents.map((e) => `<li>${new Date(e.t * 1000).toLocaleTimeString()}  ${esc(e.text)}</li>`).join("")
+    : `<li class="muted">none yet</li>`;
+}
+
+// ---- manual control -------------------------------------------------------------
+let sliderBusy = false;
+const slider = $("attSlider");
+slider.addEventListener("pointerdown", () => { sliderBusy = true; });
+slider.addEventListener("input", () => { sliderBusy = true; renderAttLabel(+slider.value); });
+slider.addEventListener("change", async () => {
+  await send({cmd: "fox", action: "att", value: +slider.value});
+  sliderBusy = false;
+});
+$("toneBtn").addEventListener("click", () =>
+  send({cmd: "fox", action: "tone", value: S.state.setup.tone, dev: S.state.setup.dev}));
+$("carrierBtn").addEventListener("click", () => send({cmd: "fox", action: "carrier"}));
+$("offBtn").addEventListener("click", () => send({cmd: "fox", action: "off"}));
+$("idBtn").addEventListener("click", () => send({cmd: "fox", action: "id"}));
+$("abortBtn").addEventListener("click", () => send({cmd: "fox", action: "abort"}));
+$("freqBtn").addEventListener("click", () => send({cmd: "fox", action: "freq", value: S.state.setup.freq}));
+
+function renderAttLabel(att) {
+  const out = calDbm(att);
+  const pad = S.state && S.state.setup.pad_db;
+  let txt = `ATT ${att} · ${(att * 0.25).toFixed(2)} dB`;
+  if (out !== null) txt += ` · out ${fmt(out, 1)} dBm`;
+  if (out !== null && pad !== null && pad !== undefined) txt += ` · at radio ${fmt(out - pad, 1)} dBm`;
+  $("attLabel").textContent = txt;
+}
+
+function renderManual() {
+  const st = S.state, f = S.status;
+  const connected = st && st.connected;
+  const mode = st ? st.mode : "idle";
+  const all = ["toneBtn", "carrierBtn", "offBtn", "idBtn", "abortBtn", "freqBtn"];
+  for (const id of all) $(id).disabled = !connected || mode === "sweep" || mode === "ballpark";
+  slider.disabled = !connected || mode === "sweep";
+  if (f && !sliderBusy && !Number.isNaN(+f.att)) slider.value = f.att;
+  renderAttLabel(+slider.value);
+  $("manualHint").textContent = !connected ? "Connect the PicoFox to use these."
+    : mode === "sweep" ? "Locked while a sweep runs."
+    : mode === "ballpark" ? "Only the attenuator can change during ballpark."
+    : "Tone and Carrier use the callsign, frequency, tone and deviation from the Run pane.";
+}
+
+// ---- log ------------------------------------------------------------------------
+function renderLog() {
+  const el = $("log");
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+  el.innerHTML = S.log.map((l) =>
+    `<div class="${l.level}"><span class="t">${new Date(l.t * 1000).toLocaleTimeString()}</span> ${esc(l.msg)}</div>`).join("");
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+// ---- readout and results --------------------------------------------------------
+const HINT_CLASS = (h) => !h ? "" : h.startsWith("GOOD") ? "good" : h.startsWith("NO") || h.startsWith("CLIP") ? "err" : "warn";
+
+function renderReadout() {
+  const el = $("readout");
+  const mode = plotMode();
+  if (mode === "sweep") {
+    const r = S.run;
+    if (!r) { el.innerHTML = `<span class="sub">No sweep yet in this session.</span>`; return; }
+    const last = r.points[r.points.length - 1];
+    let html = `<span class="sub">${esc(r.label)} · run ${r.index} of ${r.of}</span>`;
+    if (r.mark !== null && r.mark !== undefined) {
+      html = `<span class="big">${fmt(r.mark, 2)}<span class="unit">dBm</span></span>
+              <span class="sub">12 dB SINAD at the radio · ${esc(r.label)} · run ${r.index} of ${r.of}</span>`;
+    } else if (last) {
+      html += `<span class="sub">${last.phase} pass · ATT ${last.att} · ${fmt(last.level, 2)} dBm → ${fmt(last.sinad, 1)} dB SINAD</span>`;
+    }
+    el.innerHTML = html;
+    return;
+  }
+  const last = S.readings[S.readings.length - 1];
+  if (!last) { el.innerHTML = `<span class="sub">Press Start to listen.</span>`; return; }
+  let html = `<span class="big">${fmt(last.sinad, 1)}<span class="unit">dB SINAD</span></span>`;
+  if (last.hint) html += `<span class="tag ${HINT_CLASS(last.hint)}">${esc(last.hint)}</span>`;
+  else if (last.under) html += `<span class="tag err">NO AUDIO</span>`;
+  else if (last.clipped) html += `<span class="tag err">CLIPPING</span>`;
+  if (last.level !== null && last.level !== undefined) html += `<span class="sub">${fmt(last.level, 1)} dBm at the radio (ATT ${last.att})</span>`;
+  el.innerHTML = html;
+}
+
+function renderResults() {
+  const el = $("results");
+  const rs = S.results;
+  if (!rs.length) { el.innerHTML = ""; return; }
+  const rows = rs.map((r, i) => `<tr title="${esc(r.csv)}">
+      <td>${i + 1}</td><td>${esc(r.label)}</td>
+      <td class="num">${r.point_dbm === null ? "none" : fmt(r.point_dbm, 2)}</td>
+      <td class="num">${r.sigma_db === null ? "–" : "± " + fmt(r.sigma_db, 2)}</td>
+      <td class="num">${r.fit_points ?? "–"}</td><td class="num">${fmt(r.pad_db, 1)}</td></tr>`).join("");
+  const pts = rs.map((r) => r.point_dbm).filter((v) => v !== null);
+  let summary = "";
+  if (pts.length >= 2) {
+    const mean = pts.reduce((a, b) => a + b, 0) / pts.length;
+    const sd = Math.sqrt(pts.reduce((a, b) => a + (b - mean) ** 2, 0) / (pts.length - 1));
+    summary = `<div class="summary">${pts.length} runs: mean ${fmt(mean, 2)} dBm, run-to-run sd ${fmt(sd, 2)} dB,
+      range ${fmt(Math.max(...pts) - Math.min(...pts), 2)} dB. All runs since the app started, whatever their setup.</div>`;
+  }
+  el.innerHTML = `<table><thead><tr><th>#</th><th>Run</th><th class="num">12 dB SINAD (dBm)</th>
+    <th class="num">Fit</th><th class="num">Points</th><th class="num">Pad (dB)</th></tr></thead>
+    <tbody>${rows}</tbody></table>${summary}`;
+}
+
+// ---- plot -----------------------------------------------------------------------
+const canvas = $("plot");
+const ctx = canvas.getContext("2d");
+let hitPoints = [];       // [{x, y, text}] for the tooltip
+let frame = null;         // plot area of the last draw
+
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function niceTicks(lo, hi, target = 6) {
+  const span = hi - lo || 1;
+  const raw = span / target;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => span / s <= target) || 10 * mag;
+  const ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) ticks.push(+v.toFixed(6));
+  return ticks;
+}
+
+function draw() {
+  const wrap = $("canvasWrap");
+  const dpr = window.devicePixelRatio || 1;
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  hitPoints = [];
+  const mode = plotMode();
+  renderLegend(mode);
+  if (mode === "sweep") drawSweep(W, H); else drawTime(W, H, mode);
+}
+
+function axes(W, H, x0, x1, y0, y1, xlabel, xfmt) {
+  const m = {l: 46, r: 14, t: 10, b: 38};
+  const f = {l: m.l, r: W - m.r, t: m.t, b: H - m.b};
+  const X = (v) => f.l + (v - x0) / (x1 - x0) * (f.r - f.l);
+  const Y = (v) => f.b - (v - y0) / (y1 - y0) * (f.b - f.t);
+  ctx.font = "11px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  ctx.lineWidth = 1;
+  for (const v of niceTicks(y0, y1, 6)) {
+    ctx.strokeStyle = css("--grid"); ctx.beginPath(); ctx.moveTo(f.l, Y(v)); ctx.lineTo(f.r, Y(v)); ctx.stroke();
+    ctx.fillStyle = css("--muted"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ctx.fillText(String(v), f.l - 6, Y(v));
+  }
+  for (const v of niceTicks(x0, x1, Math.max(3, Math.floor((f.r - f.l) / 80)))) {
+    ctx.strokeStyle = css("--grid"); ctx.beginPath(); ctx.moveTo(X(v), f.t); ctx.lineTo(X(v), f.b); ctx.stroke();
+    ctx.fillStyle = css("--muted"); ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText(xfmt(v), X(v), f.b + 6);
+  }
+  ctx.strokeStyle = css("--axis");
+  ctx.beginPath(); ctx.moveTo(f.l, f.t); ctx.lineTo(f.l, f.b); ctx.lineTo(f.r, f.b); ctx.stroke();
+  ctx.fillStyle = css("--ink2"); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  ctx.fillText(xlabel, (f.l + f.r) / 2, H - 2);
+  ctx.save(); ctx.translate(12, (f.t + f.b) / 2); ctx.rotate(-Math.PI / 2);
+  ctx.textBaseline = "middle"; ctx.fillText("SINAD (dB)", 0, 0); ctx.restore();
+  // the 12 dB line
+  ctx.setLineDash([5, 4]); ctx.strokeStyle = css("--axis"); ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(f.l, Y(TARGET_DB)); ctx.lineTo(f.r, Y(TARGET_DB)); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = css("--muted"); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+  ctx.fillText("12 dB", f.l + 4, Y(TARGET_DB) - 2);
+  frame = f;
+  return {X, Y, f};
+}
+
+function drawSweep(W, H) {
+  const cur = S.run ? S.run.points : [];
+  const all = cur.concat(...S.prevRuns);
+  let x0 = -130, x1 = -90;
+  if (all.length) {
+    x0 = Math.floor(Math.min(...all.map((p) => p.level)) - 1);
+    x1 = Math.ceil(Math.max(...all.map((p) => p.level)) + 1);
+  }
+  const y1 = Math.max(30, Math.ceil(Math.max(0, ...all.map((p) => p.sinad)) / 5) * 5 + 2);
+  const {X, Y, f} = axes(W, H, x0, x1, 0, y1, "level at the radio (dBm)", (v) => String(v).replace("-", "−"));
+  ctx.save(); ctx.beginPath(); ctx.rect(f.l, f.t, f.r - f.l, f.b - f.t); ctx.clip();
+  // earlier runs: faint lines
+  ctx.strokeStyle = css("--prev"); ctx.lineWidth = 1.5;
+  for (const run of S.prevRuns) {
+    const pts = [...run].sort((a, b) => a.level - b.level);
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(X(p.level), Y(p.sinad)) : ctx.moveTo(X(p.level), Y(p.sinad))));
+    ctx.stroke();
+  }
+  // this run: coarse hollow, fine filled
+  const accent = css("--accent"), surface = css("--surface");
+  for (const p of cur) {
+    const x = X(p.level), y = Y(p.sinad);
+    ctx.beginPath(); ctx.arc(x, y, 4, 0, 2 * Math.PI);
+    if (p.phase === "fine") { ctx.fillStyle = accent; ctx.fill(); ctx.strokeStyle = surface; ctx.lineWidth = 1.5; ctx.stroke(); }
+    else { ctx.fillStyle = surface; ctx.fill(); ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.stroke(); }
+    hitPoints.push({x, y, text: `${p.phase} · ATT ${p.att}<br>${fmt(p.level, 2)} dBm → ${fmt(p.sinad, 1)} dB SINAD (sd ${fmt(p.sd, 2)})`});
+  }
+  ctx.restore();
+  const mark = S.run && S.run.mark;
+  if (mark !== null && mark !== undefined && mark >= x0 && mark <= x1) {
+    ctx.strokeStyle = css("--mark"); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(X(mark), f.t); ctx.lineTo(X(mark), f.b); ctx.stroke();
+    ctx.fillStyle = css("--ink"); ctx.font = "600 12px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    const label = `12 dB SINAD: ${fmt(mark, 2)} dBm`;
+    const right = X(mark) + 6 + ctx.measureText(label).width < f.r;
+    ctx.textAlign = right ? "left" : "right"; ctx.textBaseline = "top";
+    ctx.fillText(label, X(mark) + (right ? 6 : -6), f.t + 4);
+  }
+  if (!all.length) emptyNote(f, running() ? "Waiting for the first reading …" : "Press Start to sweep.");
+}
+
+function drawTime(W, H, mode) {
+  const now = S.readings.length ? S.readings[S.readings.length - 1].t : Date.now() / 1000;
+  const pts = S.readings.filter((r) => now - r.t <= TIME_WINDOW_S);
+  const y1 = Math.max(30, Math.ceil(Math.max(0, ...pts.map((p) => p.sinad)) / 5) * 5 + 2);
+  const {X, Y, f} = axes(W, H, -TIME_WINDOW_S, 0, 0, y1, "seconds ago", (v) => String(-v));
+  if (mode === "ballpark") {
+    ctx.fillStyle = css("--band");
+    ctx.fillRect(f.l, Y(16), f.r - f.l, Y(9) - Y(16));
+    ctx.fillStyle = css("--good"); ctx.textAlign = "right"; ctx.textBaseline = "top";
+    ctx.fillText("good range for a sweep", f.r - 4, Y(16) + 2);
+  }
+  if (pts.length) {
+    ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2; ctx.lineJoin = "round";
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(X(p.t - now), Y(p.sinad)) : ctx.moveTo(X(p.t - now), Y(p.sinad))));
+    ctx.stroke();
+    const last = pts[pts.length - 1];
+    ctx.beginPath(); ctx.arc(X(0), Y(last.sinad), 4.5, 0, 2 * Math.PI);
+    ctx.fillStyle = css("--accent"); ctx.fill(); ctx.strokeStyle = css("--surface"); ctx.lineWidth = 2; ctx.stroke();
+    for (const p of pts) hitPoints.push({x: X(p.t - now), y: Y(p.sinad),
+      text: `${fmt(p.sinad, 1)} dB SINAD<br>${new Date(p.t * 1000).toLocaleTimeString()}${p.hint ? " · " + esc(p.hint) : ""}`});
+  } else {
+    emptyNote(f, running() ? "Listening …" : "Press Start to listen.");
+  }
+}
+
+function emptyNote(f, text) {
+  ctx.fillStyle = css("--muted"); ctx.font = "13px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(text, (f.l + f.r) / 2, (f.t + f.b) / 2);
+}
+
+function renderLegend(mode) {
+  const el = $("legend");
+  if (mode !== "sweep") { el.innerHTML = `<span><i class="line" style="background:var(--accent)"></i>SINAD, 1 s readings</span>`; return; }
+  let html = `<span><i class="hollow" style="border-color:var(--accent)"></i>coarse</span>
+              <span><i style="background:var(--accent)"></i>fine</span>`;
+  if (S.prevRuns.length) html += `<span><i class="line" style="background:var(--prev)"></i>earlier runs</span>`;
+  if (S.run && S.run.mark !== null && S.run.mark !== undefined) html += `<span><i class="line" style="background:var(--mark)"></i>12 dB point</span>`;
+  el.innerHTML = html;
+}
+
+canvas.addEventListener("mousemove", (e) => {
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  let best = null, bd = 14 * 14;
+  for (const p of hitPoints) {
+    const d = (p.x - mx) ** 2 + (p.y - my) ** 2;
+    if (d < bd) { bd = d; best = p; }
+  }
+  const tip = $("tip");
+  if (!best) { tip.hidden = true; return; }
+  tip.innerHTML = best.text;
+  tip.hidden = false;
+  const left = Math.min(best.x + 12, r.width - tip.offsetWidth - 4);
+  tip.style.left = `${Math.max(4, left)}px`;
+  tip.style.top = `${Math.max(4, best.y - tip.offsetHeight - 10)}px`;
+});
+canvas.addEventListener("mouseleave", () => { $("tip").hidden = true; });
+window.addEventListener("resize", () => draw());
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => draw());
+
+// ---- start ------------------------------------------------------------------------
+function renderAll() {
+  renderHeader(); renderSetup(); renderStatus(); renderManual();
+  renderResults(); renderReadout(); renderLog(); draw();
+}
+buildSetup();
+renderAll();

@@ -16,4 +16,7 @@ dependencies = [
 dev = ["pytest"]
 
 [tool.setuptools]
-packages = ["foxsinad"]
+packages = ["foxsinad", "foxsinad.app"]
+
+[tool.setuptools.package-data]
+"foxsinad.app" = ["static/*"]

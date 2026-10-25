@@ -10,7 +10,7 @@ summit-vs-baseline delta is measured desense, ground truth for the
 Status: the 2026-10-23 gate passed (PicoFox SINAD ceiling ≥ 23.6 dB through
 the 8935). Bench sweeps work, and an untouched setup repeats to 0.10 dB. A
 web UI is designed ([docs/plans/2026-10-25-ui-design.md](docs/plans/2026-10-25-ui-design.md))
-but not built yet.
+and built: `python -m foxsinad.app` (add `--sim` to try it without hardware).
 Bring-up and sweep instructions: [docs/bringup-audio.md](docs/bringup-audio.md).
 
 ## Setup

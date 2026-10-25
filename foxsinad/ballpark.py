@@ -27,8 +27,8 @@ from .picofox import PicoFox, PicoFoxError, set_cabled
 from .sweep import CalTable, DEFAULT_CAL, read_clean
 
 
-def hint(r):
-    """What to do next, from one reading."""
+def hint(r, stop="press Ctrl-C"):
+    """What to do next, from one reading. stop says how to end ballpark."""
     # Short, most important words first: narrow terminals cut the line.
     if r.under_range:
         return "NO AUDIO: cable/volume/squelch"
@@ -42,7 +42,7 @@ def hint(r):
     if s > 16:
         return "TOO STRONG: add atten"
     if s >= 9:
-        return "GOOD: press Ctrl-C"
+        return f"GOOD: {stop}"
     if s >= 4:
         return "TOO WEAK: remove atten"
     return "NOISE ONLY: remove atten"

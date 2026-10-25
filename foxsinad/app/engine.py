@@ -225,10 +225,10 @@ class Engine:
     def cmd_confirm_cabled(self, confirmed=True):
         """The UI's confirmation that the output goes only into a load or
         test equipment. Lasts for this engine session."""
-        self.cabled_confirmed = bool(confirmed)
         if not confirmed and self.setup["cabled"]:
             self._require_idle("leave cabled mode")
             self.setup["cabled"] = False
+        self.cabled_confirmed = bool(confirmed)
         self._state_changed()
 
     def cmd_start(self, mode):
@@ -403,7 +403,7 @@ class Engine:
                 att = int(fox.status()["att"])
                 out = self.cal.dbm(att)
                 lvl = None if s["pad_db"] is None else round(out - s["pad_db"], 2)
-                self._reading_event(r, hint=hint(r), att=att, out_dbm=round(out, 2),
+                self._reading_event(r, hint=hint(r, stop="press Stop"), att=att, out_dbm=round(out, 2),
                                     level_dbm=lvl)
         raise Stopped()
 

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>foxsinad</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">foxsinad <span id="simBadge" class="badge" hidden>simulated bench</span></div>
+  <div class="modes" role="radiogroup" aria-label="Mode">
+    <button type="button" class="seg" data-mode="sweep" role="radio">Sweep</button>
+    <button type="button" class="seg" data-mode="ballpark" role="radio">Ballpark</button>
+    <button type="button" class="seg" data-mode="meter" role="radio">Meter</button>
+  </div>
+  <div class="actions">
+    <button type="button" id="startBtn" class="primary">Start</button>
+    <button type="button" id="stopBtn" class="danger">Stop</button>
+  </div>
+  <div id="runState" class="runstate">Idle</div>
+  <div id="link" class="link" title="Connection between this page and the engine">connecting…</div>
+</header>
+
+<div id="linkBanner" class="banner err" hidden>
+  Lost the connection to the engine. If it's still running, it turns RF off after 10 s without a UI.
+</div>
+<div id="cabledBanner" class="banner warn" hidden>
+  <strong>Cabled mode:</strong> no Morse ID is sent. The PicoFox output must go into a load or
+  test equipment, never an antenna.
+</div>
+
+<main class="grid">
+  <section class="pane setup" aria-labelledby="setupTitle">
+    <h2 id="setupTitle">Run</h2>
+    <form id="setup" autocomplete="off" novalidate></form>
+    <p class="hint" id="modeHelp"></p>
+  </section>
+
+  <section class="pane plotpane" aria-labelledby="plotTitle">
+    <div class="plothead">
+      <h2 id="plotTitle">SINAD</h2>
+      <div id="legend" class="legend"></div>
+    </div>
+    <div id="readout" class="readout"></div>
+    <div class="canvaswrap" id="canvasWrap">
+      <canvas id="plot" role="img" aria-label="SINAD plot"></canvas>
+      <div id="tip" class="tip" hidden></div>
+    </div>
+    <div id="results" class="results"></div>
+  </section>
+
+  <section class="side">
+    <div class="pane" aria-labelledby="foxTitle">
+      <div class="panehead">
+        <h2 id="foxTitle">PicoFox</h2>
+        <button type="button" id="connectBtn" class="small">Connect</button>
+      </div>
+      <dl id="foxStatus" class="kv"></dl>
+      <h3>Events</h3>
+      <ul id="foxEvents" class="events"><li class="muted">none yet</li></ul>
+    </div>
+
+    <div class="pane" aria-labelledby="manualTitle">
+      <h2 id="manualTitle">Manual control</h2>
+      <label class="slider">
+        <span>Attenuator</span>
+        <input type="range" id="attSlider" min="0" max="127" step="1" value="127">
+      </label>
+      <div id="attLabel" class="attlabel"></div>
+      <div class="buttons">
+        <button type="button" id="toneBtn">Tone</button>
+        <button type="button" id="carrierBtn">Carrier</button>
+        <button type="button" id="offBtn">Off</button>
+        <button type="button" id="idBtn">Send ID</button>
+        <button type="button" id="abortBtn" title="RF off without the final Morse ID (bench use)">Off, no ID</button>
+        <button type="button" id="freqBtn" title="Retune to the frequency in the Run pane">Apply frequency</button>
+      </div>
+      <p class="hint" id="manualHint"></p>
+    </div>
+
+    <div class="pane" aria-labelledby="logTitle">
+      <h2 id="logTitle">Log</h2>
+      <div id="log" class="log" aria-live="polite"></div>
+    </div>
+  </section>
+</main>
+
+<dialog id="cabledDialog">
+  <form method="dialog">
+    <h2>Turn on cabled mode?</h2>
+    <p>Cabled mode sends <strong>no Morse ID</strong>, and lets RF turn on without a callsign.</p>
+    <p>Use it only when the PicoFox output goes into a load or test equipment through cables
+       and attenuators, <strong>never to an antenna</strong>.</p>
+    <p class="hint">You'll be asked once per session of the app. The PicoFox forgets cabled
+       mode when it powers off.</p>
+    <div class="buttons end">
+      <button value="cancel">Cancel</button>
+      <button value="ok" class="primary">Output goes into a load or test equipment</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
