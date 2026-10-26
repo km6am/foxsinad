@@ -285,9 +285,6 @@ class Engine:
             self.log("RF off" + ("" if self.setup["cabled"] else " (Morse ID first if due)"))
             fox.off()
             set_cabled(fox, False)
-        elif action == "abort":
-            fox.abort()
-            set_cabled(fox, False)
         elif action == "id":
             fox.send_id()
         else:

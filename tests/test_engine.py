@@ -144,9 +144,7 @@ def test_sim_follows_the_firmware_timeout_and_id_rules():
     fox._tick()
     assert fox.mode == "OFF" and "*TIMEOUT" in fox.events
     assert fox.events.count("*ID DONE") == 1, "the timeout sends the owed ID"
-    fox.tone(1000, 3000)
-    fox.abort()
-    assert fox._owed, "an aborted transmission still owes its ID"
+    assert not hasattr(fox, "abort"), "no off without the ID (firmware 0.4.0)"
     print("PASS test_sim_follows_the_firmware_timeout_and_id_rules")
 
 

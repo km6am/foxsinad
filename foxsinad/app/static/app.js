@@ -356,7 +356,6 @@ $("toneBtn").addEventListener("click", () =>
 $("carrierBtn").addEventListener("click", () => send({cmd: "fox", action: "carrier"}));
 $("offBtn").addEventListener("click", () => send({cmd: "fox", action: "off"}));
 $("idBtn").addEventListener("click", () => send({cmd: "fox", action: "id"}));
-$("abortBtn").addEventListener("click", () => send({cmd: "fox", action: "abort"}));
 $("freqBtn").addEventListener("click", () => send({cmd: "fox", action: "freq", value: S.state.setup.freq}));
 
 function renderAttLabel(db) {
@@ -373,7 +372,7 @@ function renderManual() {
   const st = S.state, f = S.status;
   const connected = st && st.connected;
   const mode = st ? st.mode : "idle";
-  const all = ["toneBtn", "carrierBtn", "offBtn", "idBtn", "abortBtn", "freqBtn"];
+  const all = ["toneBtn", "carrierBtn", "offBtn", "idBtn", "freqBtn"];
   for (const id of all) $(id).disabled = !connected || mode === "sweep" || mode === "ballpark";
   slider.disabled = !connected || mode === "sweep";
   if (f && !sliderBusy && !Number.isNaN(+f.att)) slider.value = f.att / 4;

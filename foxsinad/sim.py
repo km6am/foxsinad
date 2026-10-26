@@ -168,18 +168,14 @@ class SimFox:
         self._rf_on("CARRIER")
         return "CARRIER"
 
-    def off(self, skip_id=False):
+    def off(self):
         self._touch()
         with self._lock:
             self._wait_for_id()
-            if self.mode != "OFF" and self._owed and not skip_id and not self.cabled:
+            if self.mode != "OFF" and self._owed and not self.cabled:
                 self._send_id_now()
             self.mode, self.tone_hz, self.dev_hz = "OFF", 0, 0
             return "OFF"
-
-    def abort(self):
-        self.off(skip_id=True)
-        return "ABORT"
 
     def send_id(self):
         self._touch()

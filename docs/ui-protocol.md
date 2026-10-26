@@ -30,7 +30,7 @@ Commands that change the PicoFox reply once the change has been made.
 | `confirm_cabled` | `confirmed`: bool | the operator's confirmation that the output goes only into a load or test equipment; lasts for this engine session. `false` also leaves cabled mode (idle only). |
 | `start` | `mode`: `sweep`, `ballpark`, `meter` | starts a mode. Idle only. Sweep and ballpark need a connected PicoFox and a callsign or cabled mode; sweep also needs `pad_db`. |
 | `stop` | | ends the running mode; RF off. When idle, turns RF off if it's on. |
-| `fox` | `action`, `value`, `dev` | manual control: `att` (value in dB, 0–31.75, rounded to 0.25), `freq` (MHz), `tone` (value = tone Hz, dev = Hz), `carrier`, `off`, `abort` (off, no ID), `id`. Refused during a sweep; only `att` during ballpark. |
+| `fox` | `action`, `value`, `dev` | manual control: `att` (value in dB, 0–31.75, rounded to 0.25), `freq` (MHz), `tone` (value = tone Hz, dev = Hz), `carrier`, `off`, `id`. Refused during a sweep; only `att` during ballpark. |
 
 **Setup fields** (`state.setup`): `radio`, `condition`, `session`, `note`
 (text); `pad_db` (0–200, or empty), `freq` (144.02–147.98 MHz), `tone`
