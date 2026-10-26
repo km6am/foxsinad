@@ -5,8 +5,9 @@ without hardware, and for tests.
 SimFox has foxctl.PicoFox's methods (not the SCPI wire protocol; the
 firmware repo tests that) and follows the firmware's rules (docs/API.md):
 RF needs a callsign or cabled mode, cabled mode changes only with RF off,
-Morse IDs on schedule and at RF-off, and commands wait out an ID in
-progress. SimAnalyzer turns the PicoFox's level into SINAD through a
+Morse IDs on schedule and at RF-off, an owed ID is never forgiven
+(id_policy.h), the host timeout turns RF off, and commands wait out an ID
+in progress. SimAnalyzer turns the PicoFox's level into SINAD through a
 model FM receiver. `speed` divides every delay, so tests run fast.
 """
 
@@ -38,8 +39,10 @@ class SimFox:
         self.tone_hz, self.dev_hz = 1000, 3000
         self.call, self.cabled = "", False
         self._last_id = self._t0
-        self._tx_since_id = False
+        self._owed = False           # an ID is owed (id_policy.h)
         self._id_until = None
+        self.timeout_s = 60          # host timeout, OUTP:TIM
+        self._last_cmd = self._t0
 
     # -- time, scaled -----------------------------------------------------
     def _now(self):
@@ -52,14 +55,25 @@ class SimFox:
         self._tick()
         return self._id_until is not None
 
+    def _touch(self):
+        """A command arrived: the host timeout starts again."""
+        self._last_cmd = self._now()
+
     def _tick(self):
-        """Advances the automatic-ID schedule to the present."""
+        """Advances the automatic-ID schedule and the host timeout to the present."""
         now = self._now()
         if self._id_until is not None and now >= self._id_until:
             self._id_until = None
             self._last_id = now
-            self._tx_since_id = False
+            self._owed = False
             self.events.append("*ID DONE")
+        if (self.mode != "OFF" and self.timeout_s and self._id_until is None
+                and now - self._last_cmd >= self.timeout_s):
+            if self._owed and not self.cabled:
+                self.events += ["*ID START", "*ID DONE"]
+                self._last_id, self._owed = now, False
+            self.mode, self.tone_hz, self.dev_hz = "OFF", 0, 0
+            self.events.append("*TIMEOUT")
         if (self._id_until is None and self.mode != "OFF" and not self.cabled
                 and now - self._last_id > self.id_interval_s):
             self._id_until = now + ID_SECONDS
@@ -74,7 +88,7 @@ class SimFox:
         self._sleep(ID_SECONDS)
         self.events.append("*ID DONE")
         self._last_id = self._now()
-        self._tx_since_id = False
+        self._owed = False
 
     # -- context manager, like the real driver -----------------------------
     def close(self):
@@ -95,13 +109,21 @@ class SimFox:
     def hello(self):
         return f"FOXSINAD,PicoFox r3 (simulated),0,{self.version}"
 
+    def set_timeout(self, seconds):
+        self._touch()
+        if not 0 <= int(seconds) <= 3600:
+            raise PicoFoxError(f"timeout (s) {seconds} outside 0-3600")
+        self.timeout_s = int(seconds)
+
     def set_call(self, callsign):
+        self._touch()
         if not callsign or len(callsign) > 11:
             raise PicoFoxError(f"callsign {callsign!r}: 1-11 letters, digits or /")
         self.call = callsign.upper()
         return f"CALL {self.call}"
 
     def set_cabled(self, on):
+        self._touch()
         with self._lock:
             if self.mode != "OFF":
                 raise PicoFoxError(f"'OUTP:CABL {'ON' if on else 'OFF'}': "
@@ -110,6 +132,7 @@ class SimFox:
             return f"CABLED {'ON' if on else 'OFF'}"
 
     def set_freq(self, mhz):
+        self._touch()
         with self._lock:
             self._wait_for_id()
             self.freq = float(mhz)
@@ -118,21 +141,24 @@ class SimFox:
     def set_att(self, att):
         if not 0 <= int(att) <= 127:
             raise PicoFoxError(f"ATT {att} outside 0-127")
+        self._touch()
         with self._lock:
             self._wait_for_id()
             self.att = int(att)
             return f"ATT {self.att}"
 
     def _rf_on(self, mode, tone_hz=0, dev_hz=0):
+        self._touch()
         if not self.call and not self.cabled:
             raise PicoFoxError(f"'OUTP ON': -221 Settings conflict;no callsign (IDEN:CALL) "
                                "and not cabled (OUTP:CABL)")
         with self._lock:
             self._wait_for_id()
-            if self.mode == "OFF":
-                self._last_id = self._now()
+            if self.mode == "OFF" and not self._owed:
+                self._last_id = self._now()        # a fresh 9-minute window
             self.mode, self.tone_hz, self.dev_hz = mode, tone_hz, dev_hz
-            self._tx_since_id = True
+            if not self.cabled:
+                self._owed = True
 
     def tone(self, tone_hz, dev_hz):
         self._rf_on("TONE", int(tone_hz), int(dev_hz))
@@ -143,12 +169,11 @@ class SimFox:
         return "CARRIER"
 
     def off(self, skip_id=False):
+        self._touch()
         with self._lock:
             self._wait_for_id()
-            if self.mode != "OFF" and self._tx_since_id and not skip_id and not self.cabled:
+            if self.mode != "OFF" and self._owed and not skip_id and not self.cabled:
                 self._send_id_now()
-            if skip_id or self.cabled:
-                self._tx_since_id = False
             self.mode, self.tone_hz, self.dev_hz = "OFF", 0, 0
             return "OFF"
 
@@ -157,6 +182,7 @@ class SimFox:
         return "ABORT"
 
     def send_id(self):
+        self._touch()
         with self._lock:
             if self.mode == "OFF":
                 raise PicoFoxError("'IDEN': -221 Settings conflict;output is off")
@@ -167,13 +193,15 @@ class SimFox:
             return "ID"
 
     def status(self):
+        self._touch()
         self._tick()
         now = self._now()
         return dict(mode=self.mode, freq=f"{self.freq:.6f}", att=str(self.att),
                     tone=str(self.tone_hz), dev=str(self.dev_hz), call=self.call or "-",
                     rev="3", since_id=str(int(now - self._last_id)),
                     up=str(int(now - self._t0)), cabled="1" if self.cabled else "0",
-                    id_active="1" if self._id_until is not None else "0")
+                    id_active="1" if self._id_until is not None else "0",
+                    timeout=str(self.timeout_s))
 
 
 def radio_sinad(level_dbm, twelve_db_dbm, ceiling_db=32.0):

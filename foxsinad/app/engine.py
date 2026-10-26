@@ -445,6 +445,9 @@ class Engine:
             self.fox_lock.release()
         for ev in events:
             self.emit("fox_event", text=ev)
+            if ev == "*TIMEOUT":
+                self.log("the PicoFox turned RF off: no command within its host timeout "
+                         f"({st.get('timeout', '?')} s)", "warn")
         st = dict(st)
         att = int(st.get("att", 127))
         st["att_db"] = att * 0.25

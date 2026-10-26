@@ -133,6 +133,23 @@ def test_level_is_at_the_radio_only_when_cabled():
     print("PASS test_level_is_at_the_radio_only_when_cabled")
 
 
+def test_sim_follows_the_firmware_timeout_and_id_rules():
+    from foxsinad.sim import SimFox
+    fox = SimFox(speed=1000)
+    fox.set_call("N0CALL")
+    fox.set_timeout(30)
+    fox.tone(1000, 3000)
+    import time as _t
+    _t.sleep(0.04)                          # 40 simulated seconds, no command
+    fox._tick()
+    assert fox.mode == "OFF" and "*TIMEOUT" in fox.events
+    assert fox.events.count("*ID DONE") == 1, "the timeout sends the owed ID"
+    fox.tone(1000, 3000)
+    fox.abort()
+    assert fox._owed, "an aborted transmission still owes its ID"
+    print("PASS test_sim_follows_the_firmware_timeout_and_id_rules")
+
+
 def test_watchdog_turns_rf_off_without_a_ui():
     eng, q = make()
     eng.watchdog_s = 0.5
@@ -152,6 +169,7 @@ if __name__ == "__main__":
     test_cabled_needs_confirmation_and_never_ids()
     test_ballpark_stop_turns_rf_off()
     test_level_is_at_the_radio_only_when_cabled()
+    test_sim_follows_the_firmware_timeout_and_id_rules()
     test_watchdog_turns_rf_off_without_a_ui()
     test_sweep_finds_the_simulated_point()
     print("ALL PASS")
