@@ -156,6 +156,9 @@ class Engine:
             return dict(ok=False, error=str(e))
         except TypeError as e:
             return dict(ok=False, error=f"bad arguments for {name}: {e}")
+        except Exception as e:            # never leave the UI without a reply
+            self.log(f"{name} failed: {e}", "error")
+            return dict(ok=False, error=f"{name} failed: {e}")
 
     def cmd_snapshot(self):
         return dict(snapshot=self.snapshot())
@@ -409,7 +412,7 @@ class Engine:
             self._poll_once()
             while not self.stop_evt.is_set():
                 r = read_clean(fox, an, settle_s=0.0, avg_s=1.0, log=self.log)
-                att = int(fox.status()["att"])
+                att = _att_steps(fox.status())
                 out = self.cal.dbm(att)
                 lvl, ref = self._level(out)
                 self._reading_event(r, hint=hint(r, stop="press Stop"), att=att,
@@ -446,7 +449,7 @@ class Engine:
                 self.log("the PicoFox turned RF off: no command within its host timeout "
                          f"({st.get('timeout', '?')} s)", "warn")
         st = dict(st)
-        att = int(st.get("att", 127))
+        att = _att_steps(st)
         st["att_db"] = att * 0.25
         st["out_dbm"] = round(self.cal.dbm(att), 2)
         st["level_dbm"], st["level_ref"] = self._level(st["out_dbm"])
@@ -491,6 +494,13 @@ class Engine:
             with self.fox_lock:
                 self._fox_raw.close()
         self._alive = False
+
+
+def _att_steps(status):
+    """The attenuator setting in 0.25 dB steps; boards without the attenuator
+    (the r2) report '-', which counts as the maximum."""
+    att = str(status.get("att", "127"))
+    return int(att) if att.isdigit() else 127
 
 
 def _number(v, lo, hi, what):

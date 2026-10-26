@@ -186,8 +186,11 @@ def read_clean(fox, an, settle_s, avg_s, log=_say):
                 fox.status()
         before = len(fox.events)
         r = an.read(settle_s=settle_s, avg_s=avg_s)
-        fox.status()
-        if not any(e.startswith("*ID") for e in fox.events[before:]):
+        st = fox.status()
+        # Also check the ID is over: another reader (the UI's status poll) may
+        # have taken the "ID started" event between the checks above.
+        if (not any(e.startswith("*ID") for e in fox.events[before:])
+                and not _id_in_progress(fox.events) and st.get("id_active", "0") != "1"):
             return r
         log("  (Morse ID during this reading; measuring again)")
 

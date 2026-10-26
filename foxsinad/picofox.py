@@ -20,19 +20,33 @@ from pathlib import Path
 FIRMWARE_REPO = Path(os.environ.get("FOXSINAD_FIRMWARE", Path.home() / "foxsinad-firmware"))
 _FOXCTL = FIRMWARE_REPO / "tools" / "foxctl.py"
 
-if not _FOXCTL.exists():
-    raise ImportError(
-        f"{_FOXCTL} not found. Clone https://github.com/km6am/foxsinad-firmware "
-        "to ~/foxsinad-firmware, or set FOXSINAD_FIRMWARE to your checkout.")
+MISSING = (f"{_FOXCTL} not found. Clone https://github.com/km6am/foxsinad-firmware "
+           "to ~/foxsinad-firmware, or set FOXSINAD_FIRMWARE to your checkout.")
 
-_spec = importlib.util.spec_from_file_location("foxctl", _FOXCTL)
-foxctl = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(foxctl)
+try:
+    _spec = importlib.util.spec_from_file_location("foxctl", _FOXCTL)
+    foxctl = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(foxctl)
+    PicoFox = foxctl.PicoFox
+    PicoFoxError = foxctl.PicoFoxError
+    find_port = foxctl.find_port
+    main = foxctl.main
+except (FileNotFoundError, ImportError) as _e:
+    # Without the driver (or pyserial), the simulator and the analysis
+    # tools still work; only talking to a real PicoFox fails, and says why.
+    foxctl = None
+    _why = MISSING if not _FOXCTL.exists() else f"can't load {_FOXCTL}: {_e}"
 
-PicoFox = foxctl.PicoFox
-PicoFoxError = foxctl.PicoFoxError
-find_port = foxctl.find_port
-main = foxctl.main
+    class PicoFoxError(RuntimeError):
+        """Stands in for foxctl.PicoFoxError when the driver isn't available."""
+
+    def PicoFox(*_a, **_k):
+        raise PicoFoxError(_why)
+
+    find_port = PicoFox
+
+    def main():
+        raise SystemExit(f"error: {_why}")
 
 
 def set_cabled(fox, cabled):

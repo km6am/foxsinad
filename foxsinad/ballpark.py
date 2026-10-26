@@ -24,7 +24,7 @@ import sys
 from .analyzer import CLIP_LEVEL, SinadAnalyzer, pick_device, pick_monitor, sinad_bar, \
     status_line
 from .picofox import PicoFox, PicoFoxError, set_cabled
-from .sweep import CalTable, DEFAULT_CAL, read_clean
+from .sweep import CalTable, DEFAULT_CAL, level_reference, read_clean
 
 
 def hint(r, stop="press Ctrl-C"):
@@ -111,7 +111,8 @@ def main():
         print("No attenuation entered. Run the sweep with --pad-db <total dB>.")
         return
     if last is not None and 10 <= last.sinad_db <= 14:
-        print(f"\nThe radio is near 12 dB SINAD at about {out - pad:.1f} dBm "
+        where = level_reference(args.cabled, pad)[1]
+        print(f"\n12 dB SINAD is near {out - pad:.1f} dBm {where} "
               "(a rough figure; the sweep measures it properly).")
     print("\nNext:")
     print(f"  ~/miniconda3/envs/sota-rf/bin/python -m foxsinad.sweep --pad-db {pad:g} "

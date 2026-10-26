@@ -40,6 +40,22 @@ def run_order_key(path):
     return (head, int(tail)) if tail.isdigit() and head.endswith("MHz") else (stem, 1)
 
 
+REF_AXIS = {"radio": "level at the radio (dBm)",
+            "antenna": "level into the transmit antenna (dBm)",
+            "output": "PicoFox output (dBm)"}
+
+
+def level_ref(meta):
+    """What a run's levels are (sweep.level_reference). Runs saved before the
+    level_ref header line were all cabled bench runs, so: the radio."""
+    text = meta.get("level_ref", "")
+    for key, words in (("radio", "radio input"), ("antenna", "transmit antenna"),
+                       ("output", "PicoFox output")):
+        if words in text:
+            return key
+    return "radio"
+
+
 def summarize(folder):
     runs = []
     for path in sorted(Path(folder).glob("*.csv"), key=run_order_key):
@@ -47,6 +63,7 @@ def summarize(folder):
             continue
         meta, rows = read_run(path)
         runs.append(dict(name=path.stem, meta=meta, rows=rows,
+                         ref=level_ref(meta),
                          p12=_num(meta.get("sinad12_dbm")),
                          sigma=_num(meta.get("sinad12_sigma_db"))))
     return runs
@@ -59,6 +76,10 @@ def main():
     args = ap.parse_args()
 
     runs = summarize(args.folder)
+    refs = {r["ref"] for r in runs}
+    if len(refs) > 1:
+        raise SystemExit("These runs measure levels in different places (" + ", ".join(sorted(refs))
+                         + "): cabled and over the air don't pool. Put them in separate folders.")
     pts = [r["p12"] for r in runs if r["p12"] is not None]
     print(f"{len(runs)} runs, {len(pts)} with a 12 dB point\n")
     for i, r in enumerate(runs, 1):
@@ -81,10 +102,10 @@ def main():
         if ref[0] is not None and pts:
             print(f"\n  HP 8935 reference ({ref[2]}): {ref[0]:.2f} dBm; "
                   f"foxsinad mean is {st.mean(pts) - ref[0]:+.2f} dB from it")
-    plot(Path(args.folder), runs, ref)
+    plot(Path(args.folder), runs, ref, REF_AXIS[refs.pop()] if refs else REF_AXIS["radio"])
 
 
-def plot(folder, runs, ref):
+def plot(folder, runs, ref, xlabel=REF_AXIS["radio"]):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -113,9 +134,10 @@ def plot(folder, runs, ref):
         if pts:
             a1.plot(*zip(*pts), "-", lw=0.9, alpha=0.55, color=BLUE,
                     label="foxsinad runs" if i == 0 else None)
-    a1.set_xlabel("level at the radio (dBm)", color=INK)
+    a1.set_xlabel(xlabel, color=INK)
     a1.set_ylabel("SINAD (dB)", color=INK)
-    a1.set_title("SINAD vs level at the radio, all runs", loc="left", color=INK, fontsize=11)
+    a1.set_title(f"SINAD vs {xlabel.replace(' (dBm)', '')}, all runs", loc="left", color=INK,
+                 fontsize=11)
     a1.legend(frameon=False, fontsize=8.5, loc="upper left", labelcolor=INK2)
 
     idx = [i + 1 for i, r in enumerate(runs) if r["p12"] is not None]
