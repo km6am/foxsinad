@@ -15,6 +15,7 @@ CLI (live meter):
     python3 -m foxsinad.analyzer --list-devices
 """
 
+import math
 import queue
 import shutil
 import sys
@@ -93,7 +94,7 @@ def sinad_db(samples, fs, bandpass=None):
 
 @dataclass
 class Reading:
-    sinad_db: float      # median over kept windows
+    sinad_db: float      # median over kept windows; NaN if none was kept
     std_db: float
     n: int               # windows kept
     n_discarded: int     # overflowed or clipped windows
@@ -243,7 +244,10 @@ class SinadAnalyzer:
         buf = np.zeros(0, dtype=np.float32)
         bad = False  # overflow seen within the current window
         needed = max(1, round(avg_s / (self.window / self.fs)))
-        while len(kept) + discarded < needed or not kept:
+        # Past avg_s it keeps going for a clean window, but not forever: audio
+        # that clips throughout returns a reading with no SINAD and its peak.
+        give_up = max(2 * needed, 8)
+        while len(kept) + discarded < needed or (not kept and discarded < give_up):
             block, overflowed = self._get()
             bad = bad or overflowed
             buf = np.concatenate([buf, block])
@@ -259,8 +263,8 @@ class SinadAnalyzer:
 
         arr = np.array(kept)
         return Reading(
-            sinad_db=float(np.median(arr)),
-            std_db=float(arr.std()),
+            sinad_db=float(np.median(arr)) if kept else math.nan,
+            std_db=float(arr.std()) if kept else math.nan,
             n=len(kept),
             n_discarded=discarded,
             peak=peak,

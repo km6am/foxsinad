@@ -171,3 +171,22 @@ if __name__ == "__main__":
     test_watchdog_turns_rf_off_without_a_ui()
     test_sweep_finds_the_simulated_point()
     print("ALL PASS")
+
+
+def test_an_unplugged_picofox_is_dropped_not_polled_forever():
+    eng, q = make()
+    assert eng.handle(dict(cmd="connect"))["ok"]
+
+    def unplugged():
+        raise OSError("USB get_status request failed")
+    eng._fox_raw.status = unplugged
+    for _ in range(3):
+        eng._poll_once()
+    assert eng.fox is None and eng.snapshot()["state"]["connected"] is False
+    errors = []
+    while not q.empty():
+        e = q.get()
+        if e["event"] == "log" and e["level"] == "error":
+            errors.append(e["msg"])
+    assert len(errors) == 2 and "lost the PicoFox" in errors[1], errors   # not one per poll
+    assert eng.handle(dict(cmd="connect"))["ok"]                          # and it can come back

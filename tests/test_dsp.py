@@ -92,3 +92,11 @@ def test_read_gives_up_when_the_audio_stops():
     an.no_audio_s = 0.1
     with an, pytest.raises(NoAudio, match="no audio"):
         an.read(0.0, 1.0)
+
+
+def test_audio_clipped_throughout_reads_as_no_sinad_not_a_hang():
+    # A radio turned up too far: every window clips. The meter gets a reading
+    # it can show as "clipped" after at most 2 s, not a read() that waits forever.
+    loud = np.clip(_tone(1000, 2.0), -1, 1)
+    r = _fed_reading([(loud, False)])
+    assert np.isnan(r.sinad_db) and r.n == 0 and r.n_discarded == 8 and r.peak >= 0.99

@@ -186,6 +186,8 @@ def read_clean(fox, an, settle_s, avg_s, log=_say):
                 fox.status()
         before = len(fox.events)
         r = an.read(settle_s=settle_s, avg_s=avg_s)
+        if math.isnan(r.sinad_db):
+            raise SweepError("the audio clipped throughout the reading: turn the radio's volume down")
         st = fox.status()
         # Also check the ID is over: another reader (the UI's status poll) may
         # have taken the "ID started" event between the checks above.

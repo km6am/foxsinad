@@ -15,6 +15,7 @@ Safety rules (docs/plans/2026-10-25-ui-design.md):
 """
 
 import argparse
+import contextlib
 import math
 import queue
 import threading
@@ -30,6 +31,7 @@ from ..sweep import CalTable, Stopped, SweepError, level_reference, read_clean
 
 WATCHDOG_S = 10.0
 STATUS_EVERY_S = 1.0
+LOST_AFTER_POLLS = 3     # failed status polls in a row (while idle) before the PicoFox counts as gone
 ID_INTERVAL_S = 540
 
 SETUP_DEFAULTS = dict(
@@ -88,6 +90,7 @@ class Engine:
         self.hello = None
         self.last_status = None
         self._events_seen = 0
+        self._poll_failures = 0
 
         self.mode = "idle"
         self.worker = None
@@ -176,6 +179,7 @@ class Engine:
         self.fox = _Locked(raw, self.fox_lock)
         self.hello = self.fox.hello()
         self._events_seen = len(raw.events)
+        self._poll_failures = 0
         self.log(f"PicoFox connected: {self.hello} on {raw.port}")
         self._state_changed()
         self._poll_once()
@@ -344,7 +348,8 @@ class Engine:
         return round(out_dbm - pad, 2), ref
 
     def _reading_event(self, r, **extra):
-        self.emit("reading", sinad_db=round(r.sinad_db, 2), std_db=round(r.std_db, 3),
+        # No SINAD (every window clipped) goes out as null: JSON has no NaN.
+        self.emit("reading", sinad_db=_round(r.sinad_db, 2), std_db=_round(r.std_db, 3),
                   peak_dbfs=round(peak_dbfs(r.peak), 1), clipped=r.peak >= CLIP_LEVEL,
                   under_range=r.under_range, n_discarded=r.n_discarded, **extra)
 
@@ -439,15 +444,30 @@ class Engine:
             return
         if not self.fox_lock.acquire(timeout=0.2):
             return                       # a long command (an ID) holds the PicoFox
+        lost = False
         try:
             st = self._fox_raw.status()
             events = self._fox_raw.events[self._events_seen:]
             self._events_seen = len(self._fox_raw.events)
+            self._poll_failures = 0
         except Exception as e:
-            self.log(f"PicoFox status failed: {e}", "error")
-            return
+            self._poll_failures += 1
+            if self._poll_failures == 1:
+                self.log(f"PicoFox status failed: {e}", "error")
+            lost = self._poll_failures >= LOST_AFTER_POLLS and self.mode == "idle"
+            if lost:
+                with contextlib.suppress(Exception):
+                    self._fox_raw.close()
+                self.fox = self._fox_raw = self.hello = self.last_status = None
         finally:
             self.fox_lock.release()
+        if self._poll_failures:
+            if lost:
+                self.log("lost the PicoFox (unplugged?): disconnected. Connect when it's back.",
+                         "error")
+                self.emit("status", status=None)
+                self._state_changed()
+            return
         for ev in events:
             self.emit("fox_event", text=ev)
             if ev == "*TIMEOUT":
@@ -499,6 +519,10 @@ class Engine:
             with self.fox_lock:
                 self._fox_raw.close()
         self._alive = False
+
+
+def _round(x, digits):
+    return None if math.isnan(x) else round(x, digits)
 
 
 def _att_steps(status):
