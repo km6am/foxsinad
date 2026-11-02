@@ -162,6 +162,8 @@ transport.events((ev) => {
       S.log.push({t: ev.t, level: ev.level, msg: ev.msg});
       S.log = S.log.slice(-300);
       renderLog();
+      // An error (a mode that stopped, say) also shows where you're looking.
+      if (ev.level === "error") toast(String(ev.msg).split("\n")[0]);
       break;
   }
 });
