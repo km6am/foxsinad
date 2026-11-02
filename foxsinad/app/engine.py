@@ -23,7 +23,7 @@ import traceback
 from pathlib import Path
 
 from .. import sweep
-from ..analyzer import CLIP_LEVEL, peak_dbfs
+from ..analyzer import CLIP_LEVEL, NoAudio, peak_dbfs
 from ..ballpark import hint
 from ..picofox import PicoFox, PicoFoxError, find_port, set_cabled
 from ..sweep import CalTable, Stopped, SweepError, level_reference, read_clean
@@ -358,7 +358,7 @@ class Engine:
             getattr(self, f"_mode_{mode}")()
         except Stopped:
             self.log(f"{mode} stopped")
-        except (SweepError, PicoFoxError, CommandError, LookupError) as e:
+        except (SweepError, PicoFoxError, CommandError, LookupError, NoAudio) as e:
             self.log(e, "error")
         except Exception as e:
             self.log(f"{mode} failed: {e}\n{traceback.format_exc()}", "error")

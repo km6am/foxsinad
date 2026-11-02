@@ -8,9 +8,10 @@ import threading
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from foxsinad.analyzer import SinadAnalyzer, make_bandpass, sinad_db  # noqa: E402
+from foxsinad.analyzer import NoAudio, SinadAnalyzer, make_bandpass, sinad_db  # noqa: E402
 
 FS = 48000
 N = FS // 4  # one 250 ms window, as used live
@@ -83,3 +84,11 @@ if __name__ == "__main__":
             fn()
             print(f"PASS {name}")
     print("ALL PASS")
+
+
+def test_read_gives_up_when_the_audio_stops():
+    # Unplugged mid-run, or a capture that never started: an error, not a hang.
+    an = SinadAnalyzer(None)
+    an.no_audio_s = 0.1
+    with an, pytest.raises(NoAudio, match="no audio"):
+        an.read(0.0, 1.0)

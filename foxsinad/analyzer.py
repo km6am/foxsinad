@@ -49,6 +49,11 @@ import sinad as _sinad  # noqa: E402  (sinad_meter's; returns radio-definition S
 
 CLIP_LEVEL = 0.99
 UNDER_RANGE_PEAK = 0.003  # below this the window is probably silence/cable trouble
+NO_AUDIO_S = 2.0  # read() gives up after this long without a block (they come every 10-250 ms)
+
+
+class NoAudio(RuntimeError):
+    """The sound card stopped delivering audio (unplugged, or capture failed)."""
 
 
 def status_line(text):
@@ -175,6 +180,7 @@ class SinadAnalyzer:
         self.monitor = Monitor(monitor, fs, monitor_gain) if monitor is not None else None
         self.fs = fs
         self.window = round(fs * window_s)
+        self.no_audio_s = NO_AUDIO_S
         self._bpf = make_bandpass(fs, hpf_hz, lpf_hz)
         self._q = queue.Queue()
         self._overflowed = False
@@ -216,13 +222,20 @@ class SinadAnalyzer:
         except queue.Empty:
             pass
 
+    def _get(self):
+        try:
+            return self._q.get(timeout=self.no_audio_s)
+        except queue.Empty:
+            raise NoAudio(f"no audio from the sound card for {self.no_audio_s:g} s") from None
+
     def read(self, settle_s=0.5, avg_s=2.0):
-        """Discards settle_s of audio, then measures windows for avg_s."""
+        """Discards settle_s of audio, then measures windows for avg_s.
+        Raises NoAudio if the audio stops, rather than waiting forever."""
         self._drain()
         # settle: consume and drop
         dropped = 0
         while dropped < settle_s * self.fs:
-            block, _ = self._q.get()
+            block, _ = self._get()
             dropped += len(block)
 
         kept, discarded = [], 0
@@ -231,7 +244,7 @@ class SinadAnalyzer:
         bad = False  # overflow seen within the current window
         needed = max(1, round(avg_s / (self.window / self.fs)))
         while len(kept) + discarded < needed or not kept:
-            block, overflowed = self._q.get()
+            block, overflowed = self._get()
             bad = bad or overflowed
             buf = np.concatenate([buf, block])
             while len(buf) >= self.window:
