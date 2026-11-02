@@ -90,6 +90,16 @@ def level_reference(cabled, pad_db):
     return "output", "at the PicoFox output", "PicoFox output (dBm)"
 
 
+# What each level_reference() key means, as written in a sweep's CSV header.
+LEVEL_REF_HEADER = {
+    "radio": "level at the radio input (cabled: output - external attenuation)",
+    "antenna": "PicoFox output into the transmit antenna, after the external "
+               "attenuation; over the air, not the level at the radio",
+    "output": "PicoFox output, not the level at the radio (over the air, or "
+              "cabled with no external attenuation entered)",
+}
+
+
 class CalTable:
     """PicoFox output (dBm) vs attenuator setting, interpolated between
     the measured settings."""
@@ -382,11 +392,7 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
         condition=args.condition or "(none)", note=args.note,
         station_call=(args.call or "").upper() or "(not set)",
         cabled="yes (no Morse ID)" if cabled else "no",
-        level_ref={"radio": "level at the radio input (cabled: output - external attenuation)",
-                   "antenna": "PicoFox output into the transmit antenna, after the external "
-                              "attenuation; over the air, not the level at the radio",
-                   "output": "PicoFox output, not the level at the radio (over the air, or "
-                             "cabled with no external attenuation entered)"}[ref],
+        level_ref=LEVEL_REF_HEADER[ref],
         session=args.session or "(none)",
         af_input=getattr(args, "af_input", None) or f"audio device {dev}", af_filter1="200Hz HPF (software)",
         af_filter2="3kHz LPF (software)", af_deemphasis="(radio's own)",
