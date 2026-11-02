@@ -190,3 +190,16 @@ def test_an_unplugged_picofox_is_dropped_not_polled_forever():
             errors.append(e["msg"])
     assert len(errors) == 2 and "lost the PicoFox" in errors[1], errors   # not one per poll
     assert eng.handle(dict(cmd="connect"))["ok"]                          # and it can come back
+
+
+def test_meter_transmits_the_tone_and_stop_turns_rf_off():
+    eng, q = make()
+    assert eng.handle(dict(cmd="connect"))["ok"]
+    assert eng.handle(dict(cmd="setup", call="KM6AM", freq=145.55, tone=1000, dev=3000))["ok"]
+    assert eng.handle(dict(cmd="start", mode="meter"))["ok"]
+    seen = drain(q, lambda e: e["event"] == "reading")
+    on = [e["status"] for e in seen if e["event"] == "status" and e["status"]]
+    assert on and on[-1]["mode"] == "TONE" and abs(float(on[-1]["freq"]) - 145.55) < 1e-6, on[-1:]
+    assert eng.handle(dict(cmd="stop"))["ok"]
+    drain(q, lambda e: e["event"] == "state" and e["state"]["mode"] == "idle")
+    assert eng.last_status["mode"] == "OFF"

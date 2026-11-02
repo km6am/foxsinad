@@ -186,7 +186,8 @@ const MODE_HELP = {
   ballpark: "Transmits at the ballpark attenuation and shows SINAD live. Adjust the step "
           + "attenuator (cabled) or the spacing (over the air) until it reads about 12 dB, "
           + "then Stop. Cabled: enter the total external attenuation.",
-  meter: "Shows the radio's SINAD live without controlling the PicoFox.",
+  meter: "Shows the radio's SINAD live. With the PicoFox connected it transmits the tone "
+       + "at the setup's frequency and the attenuator as set; Stop turns RF off.",
 };
 
 function renderHeader() {
@@ -202,11 +203,28 @@ function renderHeader() {
   $("stopBtn").disabled = !st || !(running() || rfOn);
   $("runState").textContent = !st ? "" : running()
     ? `${st.mode[0].toUpperCase()}${st.mode.slice(1)} running` : "Idle";
+  renderRf(rfOn);
   $("cabledBanner").hidden = !(st && st.setup.cabled);
   $("modeHelp").textContent = MODE_HELP[mode];
   const ref = S.run && running() ? S.run.ref : setupRef();
   $("plotTitle").textContent = mode === "sweep"
     ? `SINAD vs ${REF[ref].axis.replace(" (dBm)", "")}` : "SINAD over time";
+}
+
+// Whether the PicoFox is transmitting, always in view (pages without the
+// element, such as rfbench's, skip it).
+function renderRf(rfOn) {
+  const el = $("rfState");
+  if (!el) return;
+  const st = S.status;
+  el.classList.toggle("on", !!rfOn);
+  if (!st) { el.textContent = "PicoFox not connected"; return; }
+  if (!rfOn) { el.textContent = "RF off"; return; }
+  let txt = `RF ON · ${st.mode.toLowerCase()} · ${st.cabled === "1" ? "cabled" : "on air"}`
+    + ` · ${(+st.freq).toFixed(3)} MHz`;
+  if (st.out_dbm !== undefined) txt += ` · ${fmt(st.out_dbm, 1)} dBm`;
+  if (st.id_active === "1" || st.id_active === true) txt += " · sending ID";
+  el.textContent = txt;
 }
 
 // ---- run setup -------------------------------------------------------------------

@@ -431,8 +431,20 @@ class Engine:
         raise Stopped()
 
     def _mode_meter(self):
+        """SINAD live. With the PicoFox connected it transmits the tone at the
+        setup's frequency, at the attenuator as set; Stop turns RF off."""
+        s = self.setup
+        fox = self.fox
         an, _ = self._open_analyzer()
         with an:
+            if fox is None:
+                self.log("no PicoFox connected: measuring the radio's audio only")
+            else:
+                if self._fox_mode() == "OFF":
+                    self._prepare_rf()
+                fox.set_freq(s["freq"])
+                fox.tone(s["tone"], s["dev"])
+                self._poll_once()
             while not self.stop_evt.is_set():
                 r = an.read(settle_s=0.0, avg_s=1.0)
                 self._reading_event(r)
