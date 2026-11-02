@@ -23,7 +23,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import sounddevice
+
+
+class _NoSounddevice:
+    """Stands in for sounddevice where it can't load (no PortAudio, as on
+    Android): the DSP and SinadAnalyzer(None) with feed() still work, and
+    anything that needs a sound card says why it can't."""
+
+    def __init__(self, error):
+        self._error = error
+
+    def __getattr__(self, name):
+        raise ImportError(f"sounddevice is unavailable here ({self._error})")
+
+
+try:
+    import sounddevice
+except (ImportError, OSError) as e:  # OSError: sounddevice found no PortAudio library
+    sounddevice = _NoSounddevice(e)
 
 _SINAD_METER_DIR = Path(__file__).resolve().parents[1] / "third_party" / "sinad_meter"
 sys.path.insert(0, str(_SINAD_METER_DIR))
@@ -149,7 +166,9 @@ def pick_monitor(spec, input_idx):
 
 class SinadAnalyzer:
     """Continuous capture; read() returns a robust SINAD over avg_s.
-    With monitor=<output device>, the captured audio is also played there."""
+    With monitor=<output device>, the captured audio is also played there.
+    With device=None there is no sound card stream: whoever captures the
+    audio (on Android, AudioRecord) supplies it with feed()."""
 
     def __init__(self, device, fs=48000, window_s=0.25, hpf_hz=200.0, lpf_hz=3000.0,
                  monitor=None, monitor_gain=1.0):
@@ -159,27 +178,34 @@ class SinadAnalyzer:
         self._bpf = make_bandpass(fs, hpf_hz, lpf_hz)
         self._q = queue.Queue()
         self._overflowed = False
-        self._stream = sounddevice.InputStream(
+        self._stream = None if device is None else sounddevice.InputStream(
             samplerate=fs, device=device, channels=1, callback=self._callback
         )
 
     def _callback(self, indata, _frames, _time, status):
         # PortAudio thread; a callback stream keeps the device drained,
         # which is what prevents overflows while the caller computes.
-        block = indata[:, 0].copy()
+        self.feed(indata[:, 0].copy(), status.input_overflow)
+
+    def feed(self, block, overflowed=False):
+        """Adds captured audio: one channel, float, full scale 1.0, at fs.
+        overflowed marks a block after which samples were lost."""
+        block = np.asarray(block, dtype=np.float32)
         if self.monitor is not None:
             self.monitor.feed(block)
-        self._q.put((block, bool(status.input_overflow)))
+        self._q.put((block, bool(overflowed)))
 
     def __enter__(self):
         if self.monitor is not None:
             self.monitor.start()
-        self._stream.start()
+        if self._stream is not None:
+            self._stream.start()
         return self
 
     def __exit__(self, *_):
-        self._stream.stop()
-        self._stream.close()
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
         if self.monitor is not None:
             self.monitor.stop()
 

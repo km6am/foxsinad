@@ -4,12 +4,13 @@ Runnable directly (python3 tests/test_dsp.py) or via pytest.
 """
 
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from foxsinad.analyzer import make_bandpass, sinad_db  # noqa: E402
+from foxsinad.analyzer import SinadAnalyzer, make_bandpass, sinad_db  # noqa: E402
 
 FS = 48000
 N = FS // 4  # one 250 ms window, as used live
@@ -42,6 +43,38 @@ def test_noise_only_reads_low():
     bpf = make_bandpass(FS)
     s = sinad_db(rng.normal(0, 0.05, N), FS, bpf)
     assert s < 10, s
+
+
+
+def _fed_reading(blocks, settle_s=0.0, avg_s=1.0):
+    """read() on a SinadAnalyzer with no sound card, fed from another thread
+    the way the phone's audio thread feeds it: (samples, overflowed) pairs."""
+    an = SinadAnalyzer(None)
+    result = {}
+    reader = threading.Thread(target=lambda: result.update(r=an.read(settle_s, avg_s)))
+    with an:
+        reader.start()
+        while reader.is_alive():
+            for block, overflowed in blocks:
+                an.feed(block, overflowed)
+            reader.join(0.01)
+    return result["r"]
+
+
+def test_fed_audio_reads_like_the_window_function():
+    rng = np.random.default_rng(3)
+    x = _tone(1000, 0.5) + rng.normal(0, 0.02, N)
+    r = _fed_reading([(x, False)])
+    assert r.n == 4 and r.n_discarded == 0
+    # feed() keeps float32, as the sound card stream always delivered
+    assert abs(r.sinad_db - sinad_db(x.astype(np.float32), FS, make_bandpass(FS))) < 1e-9
+
+
+def test_fed_overflow_and_clipping_are_discarded():
+    clean = _tone(1000, 0.5)
+    r = _fed_reading([(clean, False), (clean, True), (_tone(1000, 1.2), False), (clean, False)])
+    assert r.n_discarded >= 2 and r.n >= 1
+    assert r.peak >= 0.99
 
 
 if __name__ == "__main__":
