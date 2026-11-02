@@ -174,8 +174,8 @@ $PY -m foxsinad.sweep --pad-db 119 --radio uvk5 --condition bench
   the run; `--hold` keeps it open).
 - `--repeat N` runs it N times; with `--session`, a repeatability summary
   is printed at the end.
-- `--quick` shortens settling and averaging (about 1 minute per run
-  instead of 1.6; not yet checked for repeatability).
+- `--settle`, `--avg-coarse`, `--avg-fine` override the per-reading
+  times (defaults in `sweep.py`, provisional until measured on hardware).
 
 **Antenna to antenna:** the path loss between the antennas isn't known, so
 set `--pad-db` to the attenuators only. The "level at the radio" is then

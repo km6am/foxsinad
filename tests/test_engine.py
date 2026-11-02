@@ -51,7 +51,7 @@ def test_sweep_finds_the_simulated_point():
     eng, q = make()
     assert q.get()["event"] == "snapshot"
     assert eng.handle(dict(cmd="connect"))["ok"]
-    assert eng.handle(dict(cmd="setup", quick=True, radio="SIM", condition="bench"))["ok"]
+    assert eng.handle(dict(cmd="setup", radio="SIM", condition="bench"))["ok"]
     assert eng.handle(dict(cmd="start", mode="sweep"))["ok"]
     r = eng.handle(dict(cmd="fox", action="tone", value=1000, dev=3000))
     assert not r["ok"] and "locked" in r["error"], r
@@ -227,7 +227,7 @@ def test_a_refusal_names_the_field_that_caused_it():
 def test_a_cabled_sweep_without_attenuation_runs_and_reports_picofox_output():
     eng, q = make()
     eng.handle(dict(cmd="confirm_cabled"))
-    assert eng.handle(dict(cmd="setup", cabled=True, pad_db="", quick=True))["ok"]
+    assert eng.handle(dict(cmd="setup", cabled=True, pad_db=""))["ok"]
     assert eng.handle(dict(cmd="connect"))["ok"]
     assert eng.handle(dict(cmd="start", mode="sweep"))["ok"]
     seen = drain(q, lambda e: e["event"] == "run_started")
@@ -247,6 +247,15 @@ def test_the_setup_is_remembered_but_not_cabled_mode():
     assert (s["call"], s["freq"], s["radio"], s["cabled"]) == ("KM6AM", 146.52, "TD-H3", False), s
     again.shutdown()
     assert not (Path(make()[0].runs_dir) / "setup.json").exists()   # the simulator keeps nothing
+
+
+def test_a_saved_setup_from_an_older_version_still_loads():
+    import json
+    runs = tempfile.mkdtemp()
+    (Path(runs) / "setup.json").write_text(json.dumps(dict(call="KM6AM", quick=True)))
+    eng = Engine(runs_dir=runs)
+    assert eng.setup["call"] == "KM6AM" and "quick" not in eng.setup, eng.setup
+    eng.shutdown()
 
 
 def test_a_clipped_reading_is_valid_json():

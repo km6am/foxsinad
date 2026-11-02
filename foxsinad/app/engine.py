@@ -42,7 +42,7 @@ ID_INTERVAL_S = 540
 
 SETUP_DEFAULTS = dict(
     radio="", condition="", session="", note="", pad_db=None, call="",
-    freq=145.55, tone=1000, dev=3000, repeat=1, quick=False, monitor=False,
+    freq=145.55, tone=1000, dev=3000, repeat=1, monitor=False,
     ballpark_att_db=16.0, cabled=False)
 
 NUMERIC = dict(pad_db=(0.0, 200.0), freq=(144.02, 147.98), tone=(100, 2400),
@@ -267,7 +267,7 @@ class Engine:
                         raise CommandError(f"{k} must be {'a whole number ' if k in INTEGER else ''}"
                                            f"from {lo:g} to {hi:g}", k)
                     v = int(v) if k in INTEGER else v
-            elif k in ("quick", "monitor", "cabled"):
+            elif k in ("monitor", "cabled"):
                 v = bool(v)
             else:
                 v = str(v).strip()
@@ -430,14 +430,11 @@ class Engine:
 
     def _sweep_args(self, af_input):
         s = self.setup
-        quick = s["quick"]
         return argparse.Namespace(
             pad_db=s["pad_db"], label="run", session=s["session"], radio=s["radio"],
             condition=s["condition"], note=s["note"], call=s["call"], cabled=s["cabled"],
             freq=s["freq"], tone=s["tone"], dev=s["dev"],
-            settle=sweep.QUICK["settle"] if quick else sweep.SETTLE_S,
-            avg_coarse=sweep.QUICK["avg_coarse"] if quick else sweep.AVG_COARSE_S,
-            avg_fine=sweep.QUICK["avg_fine"] if quick else sweep.AVG_FINE_S,
+            settle=sweep.SETTLE_S, avg_coarse=sweep.AVG_COARSE_S, avg_fine=sweep.AVG_FINE_S,
             tail_db=3.0, device=self.audio_device,
             port=None, cal=str(self.cal.path), monitor=False, live=False,
             runs_dir=self.runs_dir, af_input=af_input)

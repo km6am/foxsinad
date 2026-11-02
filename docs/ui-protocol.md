@@ -35,7 +35,7 @@ Commands that change the PicoFox reply once the change has been made.
 **Setup fields** (`state.setup`): `radio`, `condition`, `session`, `note`
 (text); `pad_db` (0–200, or empty), `freq` (144.02–147.98 MHz), `tone`
 (100–2400 Hz), `dev` (100–10000 Hz), `repeat` (1–100), `ballpark_att_db`
-(0–31.75 dB, rounded to 0.25); `quick`, `monitor`, `cabled` (bool).
+(0–31.75 dB, rounded to 0.25); `monitor`, `cabled` (bool).
 `cabled: true` needs `confirm_cabled` first, and can only change while
 idle with RF off. `pad_db` is required for a cabled sweep only.
 

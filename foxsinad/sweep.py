@@ -50,11 +50,14 @@ RUNS = ROOT / "runs"
 TARGET_DB = 12.0
 
 # Seconds per reading: settle after each level change, then average.
-SETTLE_S = 1.0
-AVG_COARSE_S = 1.0
-AVG_FINE_S = 3.0
-QUICK = dict(settle=0.5, avg_coarse=0.75, avg_fine=1.5)
+# Provisional: not yet measured on hardware (settling time and how fast
+# SINAD fluctuates at the 12 dB point decide them).
+SETTLE_S = 0.5
+AVG_COARSE_S = 0.5
+AVG_FINE_S = 1.5
 FINE_MARGIN = 4            # ATT steps (1 dB) past the coarse bracket
+FIT_BAND_DB = 4.0          # the 12 dB fit uses readings within this of the target
+FINE_BEYOND = 2            # a fine-pass side ends after this many readings outside it
 
 
 class SweepError(RuntimeError):
@@ -144,7 +147,7 @@ def twelve_db_fit(levels, sinads, target=TARGET_DB):
     crossing level. Otherwise linear interpolation between the two points
     either side of the first crossing from the strong end (sigma None)."""
     pts = sorted(zip(levels, sinads), reverse=True)      # strongest first
-    near = [(l, s) for l, s in pts if abs(s - target) <= 4]
+    near = [(l, s) for l, s in pts if abs(s - target) <= FIT_BAND_DB]
     if len(near) >= 3:
         x = np.array([l for l, _ in near])
         y = np.array([s for _, s in near])
@@ -172,10 +175,21 @@ def twelve_db_point(levels, sinads, target=TARGET_DB):
     return None if fit is None else fit[0]
 
 
-def fine_steps(a, b):
-    """The fine pass: 0.25 dB steps across the coarse bracket (a strong
-    side, b weak side), with a little margin."""
-    return range(max(0, a - FINE_MARGIN), min(127, b + FINE_MARGIN) + 1)
+def fine_pass(a, sa, b, sb, measure):
+    """The fine pass: 0.25 dB steps outward from where the coarse pass
+    crossed 12 dB, between ATT a (SINAD sa, above) and b (sb, below). Each
+    side - stronger first - ends after FINE_BEYOND readings in a row outside
+    the fit band, which the fit would ignore, or a little past the bracket.
+    measure(att) returns the SINAD."""
+    lo, hi = max(0, a - FINE_MARGIN), min(127, b + FINE_MARGIN)
+    start = round(a + (sa - TARGET_DB) / (sa - sb) * (b - a)) if sa != sb else a
+    start = min(max(start, lo), hi)
+    for att_range in (range(start, lo - 1, -1), range(start + 1, hi + 1)):
+        outside = 0
+        for att in att_range:
+            outside = outside + 1 if abs(measure(att) - TARGET_DB) > FIT_BAND_DB else 0
+            if outside >= FINE_BEYOND:
+                break
 
 
 def _id_in_progress(events):
@@ -328,9 +342,9 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
                 b = min(below)
                 stronger = [x for x in above if x < b]
                 a = max(stronger) if stronger else 0
-
-                for att in fine_steps(a, b):
-                    measure("fine", att, args.avg_fine)
+                by_att = {r["att"]: r["sinad_db"] for r in coarse}
+                fine_pass(a, by_att.get(a, TARGET_DB), b, by_att[b],
+                          lambda att: measure("fine", att, args.avg_fine))
         finally:
             fox.off()
             fox.set_att(127)
@@ -495,14 +509,9 @@ def main():
                    help="live plot window, closed 3 s after each run (see --hold)")
     p.add_argument("--hold", action="store_true",
                    help="with --live: keep the plot open until you close it")
-    p.add_argument("--quick", action="store_true",
-                   help="faster: settle 0.5 s, coarse 0.75 s, fine 1.5 s per reading "
-                        "(about 1 min per run instead of 1.6)")
     p.add_argument("--repeat", type=int, default=1, metavar="N",
                    help="run the sweep N times in a row (stops at the first error)")
     args = p.parse_args()
-    if args.quick:
-        args.settle, args.avg_coarse, args.avg_fine = (QUICK[k] for k in ("settle", "avg_coarse", "avg_fine"))
     try:
         for i in range(1, args.repeat + 1):
             if args.repeat > 1:

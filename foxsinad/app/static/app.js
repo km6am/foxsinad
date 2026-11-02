@@ -280,7 +280,6 @@ const FIELDS = [
   {sep: true, group: "setup"},
   {k: "repeat", label: "Repeat", unit: "sweeps", type: "number", step: "1", group: "sweep"},
   {k: "ballpark_att_db", label: "Ballpark attenuation", unit: "dB, PicoFox", type: "number", step: "0.25", group: "level"},
-  {k: "quick", label: "Quick sweep (shorter readings)", type: "checkbox", group: "sweep"},
   {k: "monitor", label: "Play the audio on the speakers", type: "checkbox", group: "setup"},
   {k: "cabled", label: "Cabled: no Morse ID", type: "checkbox", group: "setup"},
 ];

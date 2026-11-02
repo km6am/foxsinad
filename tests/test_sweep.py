@@ -103,6 +103,13 @@ def test_finds_the_12db_point():
     assert not list(sweep.RUNS.glob("*.partial.csv")), "partial file must be removed"
     coarse = [l for l in csv_text.splitlines() if l.startswith("coarse")]
     assert float(coarse[-1].split(",")[4]) < 3.0, "coarse pass must reach the tail"
+    # The fine pass walks out from the crossing: each side stops after
+    # FINE_BEYOND readings outside the fit band, so few are wasted.
+    fine = sorted((int(l.split(",")[8]), float(l.split(",")[4]))
+                  for l in csv_text.splitlines() if l.startswith("fine"))
+    outside = [att for att, snd in fine if abs(snd - sweep.TARGET_DB) > sweep.FIT_BAND_DB]
+    assert len(outside) <= 2 * sweep.FINE_BEYOND, fine
+    assert len(fine) == len({att for att, _ in fine}), "no level measured twice"
     print(f"PASS test_finds_the_12db_point: found {point:.2f} dBm (true {TRUE_12DB_DBM})")
 
 
