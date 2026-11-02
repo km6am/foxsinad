@@ -131,6 +131,26 @@ def test_a_tone_off_the_audio_target_warns_but_runs():
     print("PASS test_a_tone_off_the_audio_target_warns_but_runs")
 
 
+def test_no_matplotlib_still_finishes_the_run():
+    # The phone has no matplotlib: the plot is skipped, the run still ends
+    # with its result (it used to fail after saving the CSV).
+    import builtins
+    real = builtins.__import__
+    def no_mpl(name, *a, **k):
+        if name.startswith("matplotlib"):
+            raise ImportError("No module named 'matplotlib'")
+        return real(name, *a, **k)
+    said = []
+    d = Path(tempfile.mkdtemp())
+    builtins.__import__ = no_mpl
+    try:
+        sweep.plot(d / "x.csv", [], None, log=said.append)
+    finally:
+        builtins.__import__ = real
+    assert not (d / "x.png").exists() and any("no PNG" in m for m in said), said
+    print("PASS test_no_matplotlib_still_finishes_the_run")
+
+
 def test_cabled_never_outlives_a_run():
     from foxsinad import picofox
     fox = StubFox()

@@ -480,7 +480,8 @@ class Engine:
                         level_ref=level_reference(args.cabled, args.pad_db)[0]),
                     on_point=lambda row: self.emit("point", **_jsonable(row)),
                     log=self.log, stop=self.stop_evt)
-                out = dict(label=res.label, csv=str(res.csv), png=str(res.csv.with_suffix(".png")),
+                png = res.csv.with_suffix(".png")
+                out = dict(label=res.label, csv=str(res.csv), png=str(png) if png.exists() else None,
                            point_dbm=_round(res.point_dbm, 2), sigma_db=_round(res.sigma_db, 3),
                            fit_points=res.fit_points, index=i, of=n,
                            radio=self.setup["radio"], condition=self.setup["condition"],

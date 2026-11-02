@@ -461,8 +461,14 @@ class LivePlot:
 
 
 def plot(path, rows, point, log=_say, xlabel="level at the radio (dBm)"):
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from matplotlib.figure import Figure
+    """Writes <path>.png, or nothing where matplotlib isn't installed (the
+    phone): the CSV is the result, the picture is a convenience."""
+    try:
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+    except ImportError:
+        log("no PNG plot: matplotlib isn't installed here (the CSV has every reading)")
+        return
 
     fig = Figure(figsize=(7.6, 4.4))
     FigureCanvasAgg(fig)
