@@ -10,7 +10,12 @@ UI runs unchanged in a WebView.
 | | Commands (UI → engine) | Events (engine → UI) |
 |---|---|---|
 | Desktop (`python -m foxsinad.app`) | `POST /cmd`, body = one command, reply = JSON | `GET /events`, server-sent events, one JSON event per `data:` line |
-| Android (planned) | `window.FoxsinadBridge.send(json)` returns the reply JSON | the app calls `window.foxsinadEvent(json)` |
+| Android (foxysinad) | `window.FoxsinadBridge.send(json)` returns the reply JSON | the app calls `window.foxsinadEvent(json)` |
+
+The Android bridge may also offer `share(folder)`: it hands the folder's
+CSV and PNG files to Android's share sheet and returns `""`, or an error
+message for a toast. The page shows its Share button only when the bridge
+has `share`.
 
 The desktop server listens on 127.0.0.1 only, checks the `Host` header,
 and only accepts `application/json` POSTs from its own origin.

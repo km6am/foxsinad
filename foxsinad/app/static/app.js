@@ -576,7 +576,19 @@ function renderSummary() {
       <td class="num">${r.sigma_db === null ? "–" : fmt(r.sigma_db, 2)}</td>
       <td class="num">${fmt(r.pad_db, 1)}</td><td class="num">${fmt(r.audio_peak_dbfs, 1)}</td></tr>`).join("")}</tbody></table>
     <p class="hint">${refs.length === 1 ? `Levels are ${REF[refs[0]].text}. ` : ""}± is each fit's own uncertainty; repeat sweeps show the real spread.</p>
-    <p class="hint">${sess ? `Session “${esc(sess)}”. ` : ""}The CSVs are in ${esc(rs[0].csv.replace(/\/[^/]*$/, ""))}.</p>`;
+    <p class="hint">${sess ? `Session “${esc(sess)}”. ` : ""}The CSVs are in ${esc(rs[0].csv.replace(/\/[^/]*$/, ""))}.</p>
+    ${canShare() ? `<div class="buttons"><button type="button" id="shareBtn">Share this session's files</button></div>` : ""}`;
+  const share = $("shareBtn");
+  if (share) share.addEventListener("click", () => {
+    const err = window.FoxsinadBridge.share(rs[0].csv.replace(/\/[^/]*$/, ""));
+    if (err) toast(err);
+  });
+}
+
+// The phone app can hand a folder's files to Android's share sheet; on the
+// desktop they're already on disk, so there's no button.
+function canShare() {
+  return !!(window.FoxsinadBridge && typeof window.FoxsinadBridge.share === "function");
 }
 
 if (TABBED) {
