@@ -78,8 +78,9 @@ button.small { padding: 3px 10px; font-size: 13px; }
 .seg + .seg { border-left: 1px solid var(--border); }
 .seg[aria-checked="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .actions { display: inline-flex; gap: 8px; }
-.runstate { font-weight: 600; color: var(--ink2); }
-.rfstate { font-size: 13px; padding: 3px 10px; border-radius: 12px; border: 1px solid var(--border); color: var(--muted); }
+.runstate { font-weight: 600; color: var(--ink2); min-width: 8.5em; }
+#startBtn { min-width: 6.5em; }
+.rfstate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; font-size: 13px; padding: 3px 10px; border-radius: 12px; border: 1px solid var(--border); color: var(--muted); }
 .rfstate.on { background: var(--err-bg); border-color: var(--err); color: var(--err); font-weight: 600; }
 .link { margin-left: auto; font-size: 12px; color: var(--muted); }
 .link.ok::before { content: "● "; color: var(--good); }
@@ -107,6 +108,7 @@ button.small { padding: 3px 10px; font-size: 13px; }
   .grid { grid-template-columns: minmax(0, 1fr); padding: 12px 16px; }
   .link { margin-left: 0; }
   .plotpane { order: -1; }      /* one column: the readout and plot before the setup form */
+  .rfstate { flex-basis: 100%; } /* a row of its own, so its text never reflows the bar */
 }
 
 /* setup form */
@@ -123,6 +125,8 @@ button.small { padding: 3px 10px; font-size: 13px; }
 .field.check > span { font-size: 13px; color: var(--ink); }
 .field .err { color: var(--err); font-size: 12px; }
 .field.invalid input { border-color: var(--err); }
+.field.attn input { outline: 3px solid var(--err); outline-offset: 0; }
+.field.attn > span { color: var(--err); font-weight: 600; }
 .sep { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
 
 /* plot */
@@ -131,14 +135,14 @@ button.small { padding: 3px 10px; font-size: 13px; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
 .legend i.line { width: 16px; height: 2px; border-radius: 1px; vertical-align: 3px; }
 .legend i.hollow { background: transparent !important; border: 2px solid; width: 10px; height: 10px; }
-.readout { min-height: 44px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin: 4px 0 6px; }
+.readout { min-height: 72px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin: 4px 0 6px; }
 .readout .big { font-size: 34px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .readout .unit { font-size: 15px; color: var(--ink2); margin-left: 3px; font-weight: 500; }
-.readout .tag { font-weight: 650; padding: 3px 10px; border-radius: 6px; font-size: 13px; }
+.readout .tag { font-weight: 650; padding: 3px 10px; border-radius: 6px; font-size: 13px; min-height: 1.4em; }
 .tag.good { background: var(--good-bg); color: var(--good); }
 .tag.warn { background: var(--warn-bg); color: var(--warn); }
 .tag.err { background: var(--err-bg); color: var(--err); }
-.readout .sub { color: var(--ink2); font-size: 13px; font-variant-numeric: tabular-nums; }
+.readout .sub { color: var(--ink2); font-size: 13px; font-variant-numeric: tabular-nums; flex-basis: 100%; min-height: 1.4em; }
 .audiolevel { flex-basis: 100%; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink2); }
 .lvlbar { flex: 1; max-width: 360px; height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }
 .lvlbar i { display: block; height: 100%; border-radius: 5px; }

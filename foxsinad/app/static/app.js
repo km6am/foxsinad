@@ -178,6 +178,7 @@ document.querySelectorAll(".seg").forEach((b) => b.addEventListener("click", () 
 // Every mode needs the PicoFox, so until it's connected this button connects it.
 $("startBtn").addEventListener("click", () => {
   if (!S.state.connected) return send({cmd: "connect"});
+  if (!S.state.setup.cabled && !callsignEntered()) return needCallsign();
   if (S.selectedMode !== "sweep") S.readings = [];
   send({cmd: "start", mode: S.selectedMode});
 });
@@ -230,6 +231,24 @@ function renderRf(rfOn) {
   if (st.out_dbm !== undefined) txt += ` · ${fmt(st.out_dbm, 1)} dBm`;
   if (st.id_active === "1" || st.id_active === true) txt += " · sending ID";
   el.textContent = txt;
+}
+
+// Transmitting on air needs a callsign for the Morse ID. The field as typed
+// counts too: its change may not have come back from the engine yet.
+function callsignEntered() {
+  const input = $("f_call");
+  return !!((input && input.value.trim()) || S.state.setup.call);
+}
+
+function needCallsign() {
+  toast("Enter a callsign (or use cabled mode)");
+  const input = $("f_call");
+  if (!input) return;
+  const field = input.closest(".field");
+  field.classList.add("invalid", "attn");
+  input.scrollIntoView({block: "center", behavior: "smooth"});
+  input.focus({preventScroll: true});
+  input.addEventListener("input", () => field.classList.remove("invalid", "attn"), {once: true});
 }
 
 // ---- run setup -------------------------------------------------------------------
@@ -435,23 +454,25 @@ function renderReadout() {
     el.innerHTML = html;
     return;
   }
-  const last = S.readings[S.readings.length - 1];
-  if (!last) { el.innerHTML = `<span class="sub">Press Start to listen.</span>`; return; }
+  // Every indicator is always drawn ("–" until there's a reading), so the
+  // page doesn't move when a run starts.
+  const last = S.readings[S.readings.length - 1] || {};
   let html = `<span class="big">${fmt(last.sinad, 1)}<span class="unit">dB SINAD</span></span>`;
   if (last.hint) html += `<span class="tag ${HINT_CLASS(last.hint)}">${esc(last.hint)}</span>`;
   else if (last.under) html += `<span class="tag err">NO AUDIO</span>`;
   else if (last.clipped) html += `<span class="tag err">CLIPPING</span>`;
-  if (last.level !== null && last.level !== undefined) {
-    html += `<span class="sub">${fmt(last.level, 1)} dBm ${REF[last.ref || "output"].text} · ${attText(last.attDb)}</span>`;
-  }
+  else html += `<span class="tag" aria-hidden="true"></span>`;
+  html += last.level !== null && last.level !== undefined
+    ? `<span class="sub">${fmt(last.level, 1)} dBm ${REF[last.ref || "output"].text} · ${attText(last.attDb)}</span>`
+    : `<span class="sub">${S.readings.length ? "" : "Press Start to listen."}</span>`;
   el.innerHTML = html + audioLevel(last);
 }
 
 // The sound card's peak level, for setting the radio's volume: a bar from
 // -60 to 0 dBFS, red when clipping, amber when too quiet to measure.
 function audioLevel(r) {
-  if (r.peak === null || r.peak === undefined) return "";
-  const pct = Math.max(0, Math.min(100, (r.peak + 60) / 60 * 100));
+  const have = r.peak !== null && r.peak !== undefined;
+  const pct = have ? Math.max(0, Math.min(100, (r.peak + 60) / 60 * 100)) : 0;
   const cls = r.clipped ? "err" : r.under ? "warn" : "good";
   return `<div class="audiolevel" title="Peak audio level at the sound card">
     <span class="lbl">Audio</span><span class="lvlbar ${cls}"><i style="width:${pct.toFixed(1)}%"></i></span>
