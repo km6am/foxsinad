@@ -140,6 +140,7 @@ transport.events((ev) => {
       S.state = ev.state; S.status = ev.status; S.cal = ev.cal; S.results = ev.results || [];
       S.records = ev.records || [];
       renderAll();
+      if (TABBED) autoConnect();
       break;
     case "state":
       S.state = ev.state;
@@ -314,6 +315,14 @@ function selectTab(t) {
   pane.hidden = !host;
   window.scrollTo(0, 0);
   renderSteps(); renderHeader(); renderReadout(); draw();
+  autoConnect();
+}
+
+// The Radio step's Next turns RF on, so the step connects the PicoFox as
+// it opens; Next stays disabled until it's connected. Once per opening (and
+// per snapshot): a failure shows its toast and a Connect button, not a loop.
+function autoConnect() {
+  if (S.tab === "radio" && S.state && !S.state.connected && !wizBusy) wizAct("connect");
 }
 
 // Each step's checkmark, from the engine's state: guidance only, nothing is
@@ -398,7 +407,8 @@ function renderWizNav() {
   nav.hidden = false;
   if (i > 0) html += b("back", "← Back", "", sweeping);
   if (t === "session") html += b("next", st.connected ? "Next: radio →" : "Connect · next →", "primary");
-  else if (t === "radio") html += b("next", "Next: levels →", "primary");
+  else if (t === "radio") html += st.connected ? b("next", "Next: levels →", "primary")
+    : b("connect", "Connect PicoFox", "primary") + b("next", "Next: levels →", "", true);
   else if (t === "levels") html += b("next", "Next: sweep →", "primary");
   else if (t === "sweep") {
     const mine = S.results.filter((r) => (r.radio || "") === (st.setup.radio || ""));
@@ -433,8 +443,16 @@ async function flushField(k) {
   return true;
 }
 
+// The steps that turn RF on connect first: after an app restart the
+// PicoFox isn't connected, and the meter would quietly run on audio alone.
+// The reply decides, not S.state, whose echo can come after it.
+async function ensureConnected() {
+  return S.state.connected || (await send({cmd: "connect"})).ok;
+}
+
 async function startSweep() {
   if (!(await stopAndWait())) return toast("couldn't stop the running mode");
+  if (!(await ensureConnected())) return;
   S.readings = [];
   selectTab("sweep");
   await send({cmd: "start", mode: "sweep"});
@@ -449,7 +467,7 @@ const WIZ = {
   next: async () => {
     if (S.tab === "session") {
       for (const k of ["session", "call", "freq"]) if (!(await flushField(k))) return;
-      if (!S.state.connected && !(await send({cmd: "connect"})).ok) return;
+      if (!(await ensureConnected())) return;
       if (!S.state.setup.cabled && !callsignEntered()) return needCallsign();
       selectTab("radio");
       focusField("radio");
@@ -458,6 +476,7 @@ const WIZ = {
       // the box as typed: the state that echoes the setup can arrive after its reply
       if (!($("f_radio").value.trim() || S.state.setup.radio)) { toast("Name the radio"); return goToField("radio"); }
       if (!(await stopAndWait())) return;
+      if (!(await ensureConnected())) return;
       S.readings = [];
       selectTab("levels");
       await send({cmd: "start", mode: "meter", att_db: S.state.setup.ballpark_att_db});
@@ -467,6 +486,7 @@ const WIZ = {
       await startSweep();
     }
   },
+  connect: ensureConnected,
   sweep: startSweep,
   nextRadio: async () => {
     if (S.run && S.run.points.length) { S.prevRuns.push(S.run.points); S.run = null; }
