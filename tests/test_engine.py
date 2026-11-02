@@ -203,3 +203,12 @@ def test_meter_transmits_the_tone_and_stop_turns_rf_off():
     assert eng.handle(dict(cmd="stop"))["ok"]
     drain(q, lambda e: e["event"] == "state" and e["state"]["mode"] == "idle")
     assert eng.last_status["mode"] == "OFF"
+
+
+def test_the_picofox_follows_the_setup_frequency():
+    eng, q = make()
+    assert eng.handle(dict(cmd="setup", freq=146.52))["ok"]
+    assert eng.handle(dict(cmd="connect"))["ok"]
+    assert abs(float(eng.last_status["freq"]) - 146.52) < 1e-6        # tuned at connect
+    assert eng.handle(dict(cmd="setup", freq=145.55))["ok"]
+    assert abs(float(eng.last_status["freq"]) - 145.55) < 1e-6        # and when it changes

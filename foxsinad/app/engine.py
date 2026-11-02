@@ -181,6 +181,12 @@ class Engine:
         self._events_seen = len(raw.events)
         self._poll_failures = 0
         self.log(f"PicoFox connected: {self.hello} on {raw.port}")
+        # A known state: not transmitting (a crashed or killed app can leave
+        # it on), and on the setup's frequency, so the page and the PicoFox agree.
+        if self._fox_mode() != "OFF":
+            self.log("the PicoFox was transmitting: RF off", "warn")
+            self._rf_off_quietly()
+        self.fox.set_freq(self.setup["freq"])
         self._state_changed()
         self._poll_once()
         return dict(hello=self.hello)
@@ -229,7 +235,12 @@ class Engine:
         if new["cabled"] and not self.cabled_confirmed:
             raise CommandError("confirm cabled mode first (output into a load or test "
                                "equipment only, never an antenna)")
+        retune = (new["freq"] != self.setup["freq"] and self.fox is not None
+                  and self.mode != "sweep")        # a sweep holds its frequency
         self.setup = new
+        if retune:
+            self.fox.set_freq(new["freq"])
+            self._poll_once()
         self._state_changed()
 
     def cmd_confirm_cabled(self, confirmed=True):
