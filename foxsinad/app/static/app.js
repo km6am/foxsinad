@@ -443,7 +443,8 @@ function buildSetup() {
     const input = $(id);
     input.addEventListener("change", () => onFieldChange(f, input));
   }
-  for (const form of document.querySelectorAll("form"))
+  // the field forms only: a dialog's form must submit, which closes it
+  for (const form of document.querySelectorAll('form:not([method="dialog"])'))
     form.addEventListener("submit", (e) => e.preventDefault());
 }
 
