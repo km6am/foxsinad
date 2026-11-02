@@ -244,6 +244,18 @@ def finish_csv(partial, final, meta):
     partial.unlink()
 
 
+def read_header(path):
+    """A finished run's # key: value header, as strings."""
+    meta = {}
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if not line.startswith("# "):
+                break
+            k, _, v = line[2:].rstrip("\r\n").partition(": ")
+            meta[k] = v
+    return meta
+
+
 def run_stem(args, runs=None):
     """File stem for the next run, named as hp8935_sinad_serial's run.py: a
     session is a folder holding <radio>_<condition>_<freq>; otherwise

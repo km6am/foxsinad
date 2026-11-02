@@ -373,3 +373,35 @@ def test_meter_with_the_picofox_reports_the_level_and_a_level_hint():
     eng.handle(dict(cmd="stop"))
     drain(q, lambda e: e["event"] == "state" and e["state"]["mode"] == "idle")
     eng.shutdown()
+
+
+def test_the_session_summary_comes_from_the_folder_and_survives_a_restart():
+    eng, q = make()
+    assert q.get()["session_sweeps"] == []                      # no session: none
+    assert eng.handle(dict(cmd="connect"))["ok"]
+    assert eng.handle(dict(cmd="setup", session="Mt Test", radio="SIM", condition="bench"))["ok"]
+    assert eng.handle(dict(cmd="start", mode="sweep"))["ok"]
+    seen = drain(q, lambda e: e["event"] == "session_sweeps" and e["sweeps"])
+    fin = [e for e in seen if e["event"] == "run_finished"][0]
+    [row] = seen[-1]["sweeps"]
+    assert row["csv"] == fin["csv"] and row["point_dbm"] == fin["point_dbm"]
+    assert row["radio"] == "SIM" and row["condition"] == "bench" and row["date"]
+    assert row["level_ref"] == fin["level_ref"] and row["fit_points"] == fin["fit_points"]
+    drain(q, lambda e: e["event"] == "state" and e["state"]["mode"] == "idle")
+    runs = eng.runs_dir
+    eng.shutdown()
+
+    # a record, and another session's sweep, aren't this session's sweeps
+    folder = runs / "Mt_Test"
+    (folder / "record_SIM_bench_145.55MHz.csv").write_text("# mode: foxsinad record\nt_s\n")
+    (runs / "Other").mkdir()
+    (runs / "Other" / "X.csv").write_text(Path(fin["csv"]).read_text())
+
+    # a new engine (an app restart) on the same folder sees the sweep
+    eng2 = Engine(sim=True, sim_speed=SPEED, runs_dir=runs)
+    q2 = eng2.subscribe()
+    assert eng2.handle(dict(cmd="setup", session="Mt Test"))["ok"]
+    sw = drain(q2, lambda e: e["event"] == "session_sweeps")[-1]
+    assert sw["session"] == "Mt Test" and [r["csv"] for r in sw["sweeps"]] == [fin["csv"]]
+    assert eng2.snapshot()["session_sweeps"] == sw["sweeps"]
+    eng2.shutdown()

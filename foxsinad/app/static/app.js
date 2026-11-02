@@ -39,6 +39,7 @@ const S = {
   state: null,          // engine state: mode, connected, setup, ...
   status: null,         // PicoFox status
   cal: null,            // {att: [...], dbm: [...]}
+  sessionSweeps: null,  // {session, sweeps}: every sweep saved in the session's folder
   results: [],          // finished sweeps this engine session
   records: [],          // finished records this engine session
   run: null,            // current sweep: {label, index, of, points: [], mark}
@@ -139,8 +140,13 @@ transport.events((ev) => {
     case "snapshot":
       S.state = ev.state; S.status = ev.status; S.cal = ev.cal; S.results = ev.results || [];
       S.records = ev.records || [];
+      S.sessionSweeps = {session: ev.state.setup.session, sweeps: ev.session_sweeps || []};
       renderAll();
       if (TABBED) autoConnect();
+      break;
+    case "session_sweeps":
+      S.sessionSweeps = {session: ev.session, sweeps: ev.sweeps};
+      renderSummary();
       break;
     case "state":
       S.state = ev.state;
@@ -543,16 +549,29 @@ function focusField(k) {
 }
 
 // Finish: this session's sweeps, one row per run.
+// "20:09", or "Nov 1 20:09" when the table spans days. From the CSV's own
+// date (local time, as the engine wrote it), so it's the sweep's start.
+function shortTime(iso, withDay) {
+  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(iso || "");
+  if (!m) return "–";
+  const day = withDay ? `${"JanFebMarAprMayJunJulAugSepOctNovDec".substr((m[2] - 1) * 3, 3)} ${+m[3]} ` : "";
+  return `${day}${m[4]}:${m[5]}`;
+}
+
 function renderSummary() {
   const el = $("summary");
   if (!el || !S.state) return;
   const sess = S.state.setup.session || "";
-  const rs = S.results.filter((r) => (r.session || "") === sess);
+  // a session: every sweep saved in its folder (the engine reads them), so
+  // a restart loses nothing; no session: only this run's
+  const folder = S.sessionSweeps && S.sessionSweeps.session === sess ? S.sessionSweeps.sweeps : [];
+  const rs = sess ? folder : S.results.filter((r) => !r.session);
   if (!rs.length) { el.innerHTML = `<span class="muted">No sweeps in this session yet.</span>`; return; }
   const refs = [...new Set(rs.map((r) => r.level_ref || "radio"))];
-  el.innerHTML = `<table><thead><tr><th>Radio</th><th class="num">12 dB SINAD (dBm)</th>
+  const days = new Set(rs.map((r) => (r.date || "").slice(0, 10)));
+  el.innerHTML = `<table><thead><tr><th>Time</th><th>Radio</th><th class="num">12 dB SINAD (dBm)</th>
     <th class="num">±</th><th class="num">Atten. (dB)</th><th class="num">Volume (dBFS)</th></tr></thead><tbody>
-    ${rs.map((r) => `<tr title="${esc(r.csv)}"><td>${esc(r.radio || "–")}${r.condition ? ` <span class="muted">${esc(r.condition)}</span>` : ""}${refs.length > 1 ? ` <span class="muted">${REF[r.level_ref || "radio"].text}</span>` : ""}</td>
+    ${rs.map((r) => `<tr title="${esc(r.csv)}"><td class="muted">${shortTime(r.date, days.size > 1)}</td><td>${esc(r.radio || "–")}${r.condition ? ` <span class="muted">${esc(r.condition)}</span>` : ""}${refs.length > 1 ? ` <span class="muted">${REF[r.level_ref || "radio"].text}</span>` : ""}</td>
       <td class="num">${r.point_dbm === null ? "none" : fmt(r.point_dbm, 2)}</td>
       <td class="num">${r.sigma_db === null ? "–" : fmt(r.sigma_db, 2)}</td>
       <td class="num">${fmt(r.pad_db, 1)}</td><td class="num">${fmt(r.audio_peak_dbfs, 1)}</td></tr>`).join("")}</tbody></table>

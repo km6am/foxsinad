@@ -186,8 +186,42 @@ class Engine:
     def snapshot(self):
         return dict(event="snapshot", t=time.time(), state=self.state(),
                     status=self.last_status, results=self.results, records=self.records,
+                    session_sweeps=self.session_sweeps(),
                     cal=dict(freq_mhz=self.cal.freq_mhz, date=self.cal.date,
                              att=list(self.cal.att), dbm=list(self.cal.dbm_pts)))
+
+    def session_sweeps(self):
+        """Every finished sweep in the session's folder, oldest first, read
+        from the CSV headers, so sweeps from before a restart (or from
+        another run of the app) count. No session: none, since the runs
+        folder itself holds every session-less run ever made."""
+        if not self.setup["session"]:
+            return []
+        folder = self.runs_dir / sweep.slug(self.setup["session"])
+        out = []
+        for path in sorted(folder.glob("*.csv")) if folder.is_dir() else []:
+            try:
+                m = sweep.read_header(path)
+            except OSError:
+                continue
+            if m.get("mode") != "foxsinad sweep":
+                continue                  # records, and anything else in the folder
+            png = path.with_suffix(".png")
+            out.append(dict(
+                label=m.get("label", path.stem), csv=str(path),
+                png=str(png) if png.exists() else None, date=m.get("date"),
+                point_dbm=_num(m.get("sinad12_dbm")), sigma_db=_num(m.get("sinad12_sigma_db")),
+                fit_points=None if _num(m.get("sinad12_fit_points")) is None
+                else int(_num(m.get("sinad12_fit_points"))),
+                audio_peak_dbfs=_num(m.get("audio_peak_dbfs")),
+                radio=_named(m.get("radio")), condition=_named(m.get("condition")),
+                session=self.setup["session"], pad_db=-(_num(m.get("offset_db")) or 0.0),
+                level_ref=next((k for k, v in sweep.LEVEL_REF_HEADER.items()
+                                if v == m.get("level_ref")), "output")))
+        return sorted(out, key=lambda r: r["date"] or "")
+
+    def _emit_session_sweeps(self):
+        self.emit("session_sweeps", session=self.setup["session"], sweeps=self.session_sweeps())
 
     def state(self):
         return dict(mode=self.mode, connected=self.fox is not None, sim=self.sim,
@@ -296,11 +330,14 @@ class Engine:
                   and self.mode != "sweep")        # a sweep holds its frequency
         if new["radio"] != self.setup["radio"]:
             self.audio_set = None             # another radio: its volume isn't set yet
+        new_session = new["session"] != self.setup["session"]
         self.setup = new
         if retune:
             self.fox.set_freq(new["freq"])
             self._poll_once()
         self._state_changed()
+        if new_session:
+            self._emit_session_sweeps()
 
     def cmd_confirm_cabled(self, confirmed=True):
         """The UI's confirmation that the output goes only into a load or
@@ -493,6 +530,7 @@ class Engine:
                            level_ref=res.level_ref)
                 self.results.append(out)
                 self.emit("run_finished", **out)
+                self._emit_session_sweeps()
 
     def _record_level(self):
         """The attenuator setting record starts at, and why: as set in the
@@ -731,6 +769,20 @@ def _whole(v, lo, hi, what):
 def _round(v, n):
     """For JSON, which has no NaN: a missing or non-finite value is null."""
     return None if v is None or not math.isfinite(v) else round(v, n)
+
+
+def _num(v):
+    """A header value as a number; missing, blank or None is None."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def _named(v):
+    """A header name; "(none)" (written for an empty field) is empty."""
+    return "" if v in (None, "(none)") else v
 
 
 def _jsonable(row):
