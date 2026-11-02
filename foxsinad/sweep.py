@@ -224,6 +224,16 @@ def read_clean(fox, an, settle_s, avg_s, log=_say):
         log("  (Morse ID during this reading; measuring again)")
 
 
+def finish_csv(partial, final, meta):
+    """The finished file: the # key: value header (known only at the end, as
+    run.py writes it), then the readings streamed to partial."""
+    with open(final, "w", newline="") as fh:
+        for k, v in meta.items():
+            fh.write(f"# {k}: {v}\n")
+        fh.write(partial.read_text())
+    partial.unlink()
+
+
 def run_stem(args, runs=None):
     """File stem for the next run, named as hp8935_sinad_serial's run.py: a
     session is a folder holding <radio>_<condition>_<freq>; otherwise
@@ -386,11 +396,7 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
         sinad12_uv=None if point is None else round(dbm_to_uv(point), 4),
         sinad12_sigma_db=None if sigma is None else round(sigma, 3),
         sinad12_fit_points=npts)
-    with open(final, "w", newline="") as fh:
-        for k, v in meta.items():
-            fh.write(f"# {k}: {v}\n")
-        fh.write(partial.read_text())
-    partial.unlink()
+    finish_csv(partial, final, meta)
 
     log(f"\nSaved {final}")
     if point is None:
