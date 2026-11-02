@@ -15,9 +15,12 @@ Safety rules (docs/plans/2026-10-25-ui-design.md):
 """
 
 import argparse
+import collections
 import contextlib
+import dataclasses
 import math
 import queue
+import statistics
 import threading
 import time
 import traceback
@@ -31,6 +34,8 @@ from ..sweep import CalTable, Stopped, SweepError, level_reference, read_clean
 
 WATCHDOG_S = 10.0
 STATUS_EVERY_S = 1.0
+METER_AVG_S = 0.25       # one analyzer window per meter reading: fast enough to adjust by
+METER_BOXCAR_S = 1.0     # the SINAD shown is the mean over this long
 LOST_AFTER_POLLS = 3     # failed status polls in a row (while idle) before the PicoFox counts as gone
 ID_INTERVAL_S = 540
 
@@ -456,8 +461,18 @@ class Engine:
                 fox.set_freq(s["freq"])
                 fox.tone(s["tone"], s["dev"])
                 self._poll_once()
+            # A reading every window, showing the boxcar mean of the last
+            # second's SINAD (in dB); the peak stays the window's own, for
+            # setting the volume. A window with no SINAD (clipped) empties it.
+            box = collections.deque(maxlen=round(METER_BOXCAR_S / METER_AVG_S))
             while not self.stop_evt.is_set():
-                r = an.read(settle_s=0.0, avg_s=1.0)
+                r = an.read(settle_s=0.0, avg_s=METER_AVG_S)
+                if math.isnan(r.sinad_db):
+                    box.clear()
+                else:
+                    box.append(r.sinad_db)
+                    r = dataclasses.replace(r, sinad_db=statistics.fmean(box),
+                                            std_db=statistics.pstdev(box))
                 self._reading_event(r)
         raise Stopped()
 

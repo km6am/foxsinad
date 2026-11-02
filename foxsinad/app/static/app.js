@@ -149,7 +149,7 @@ transport.events((ev) => {
     case "reading":
       S.readings.push({t: ev.t, sinad: ev.sinad_db, hint: ev.hint, level: ev.level_dbm,
                        ref: ev.level_ref, attDb: ev.att_db, clipped: ev.clipped,
-                       under: ev.under_range, mode: plotMode()});
+                       under: ev.under_range, peak: ev.peak_dbfs, mode: plotMode()});
       S.readings = S.readings.filter((r) => ev.t - r.t <= TIME_WINDOW_S + 5);
       renderReadout(); draw();
       break;
@@ -173,7 +173,9 @@ document.querySelectorAll(".seg").forEach((b) => b.addEventListener("click", () 
   savePref("mode", S.selectedMode);
   renderHeader(); renderReadout(); draw();
 }));
+// Every mode needs the PicoFox, so until it's connected this button connects it.
 $("startBtn").addEventListener("click", () => {
+  if (!S.state.connected) return send({cmd: "connect"});
   if (S.selectedMode !== "sweep") S.readings = [];
   send({cmd: "start", mode: S.selectedMode});
 });
@@ -199,6 +201,7 @@ function renderHeader() {
   });
   $("simBadge").hidden = !(st && st.sim);
   $("startBtn").disabled = !st || running();
+  $("startBtn").textContent = st && !st.connected ? "Connect" : "Start";
   const rfOn = S.status && S.status.mode && S.status.mode !== "OFF";
   $("stopBtn").disabled = !st || !(running() || rfOn);
   $("runState").textContent = !st ? "" : running()
@@ -439,7 +442,18 @@ function renderReadout() {
   if (last.level !== null && last.level !== undefined) {
     html += `<span class="sub">${fmt(last.level, 1)} dBm ${REF[last.ref || "output"].text} · ${attText(last.attDb)}</span>`;
   }
-  el.innerHTML = html;
+  el.innerHTML = html + audioLevel(last);
+}
+
+// The sound card's peak level, for setting the radio's volume: a bar from
+// -60 to 0 dBFS, red when clipping, amber when too quiet to measure.
+function audioLevel(r) {
+  if (r.peak === null || r.peak === undefined) return "";
+  const pct = Math.max(0, Math.min(100, (r.peak + 60) / 60 * 100));
+  const cls = r.clipped ? "err" : r.under ? "warn" : "good";
+  return `<div class="audiolevel" title="Peak audio level at the sound card">
+    <span class="lbl">Audio</span><span class="lvlbar ${cls}"><i style="width:${pct.toFixed(1)}%"></i></span>
+    <span class="lvlnum">${fmt(r.peak, 1)} dBFS</span></div>`;
 }
 
 function renderResults() {
@@ -609,7 +623,11 @@ function emptyNote(f, text) {
 
 function renderLegend(mode) {
   const el = $("legend");
-  if (mode !== "sweep") { el.innerHTML = `<span><i class="line" style="background:var(--accent)"></i>SINAD, 1 s readings</span>`; return; }
+  if (mode !== "sweep") {
+    const what = mode === "meter" ? "1 s average, every 0.25 s" : "1 s readings";
+    el.innerHTML = `<span><i class="line" style="background:var(--accent)"></i>SINAD, ${what}</span>`;
+    return;
+  }
   let html = `<span><i class="hollow" style="border-color:var(--accent)"></i>coarse</span>
               <span><i style="background:var(--accent)"></i>fine</span>`;
   if (S.prevRuns.length) html += `<span><i class="line" style="background:var(--prev)"></i>earlier runs</span>`;
