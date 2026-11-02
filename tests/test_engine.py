@@ -271,3 +271,31 @@ def test_a_clipped_reading_is_valid_json():
             break
     text = json.dumps(e, allow_nan=False)
     assert e["sinad_db"] is None and e["clipped"] is True, text
+
+
+def test_audio_hint_bands():
+    from foxsinad.analyzer import audio_hint
+    assert audio_hint(-10.0) == "OK" and audio_hint(-7.5) == "OK" and audio_hint(-12.9) == "OK"
+    assert audio_hint(-5.0) == "volume down" and audio_hint(-20.0) == "volume up"
+    assert audio_hint(-0.5, clipped=True).startswith("CLIPPING")
+    assert audio_hint(-60.0, under_range=True) == "NO AUDIO"
+    assert audio_hint(-16.0, target=-16.0) == "OK"
+
+
+def test_the_audio_step_sets_full_level_and_records_the_volume():
+    eng, q = make()
+    eng.handle(dict(cmd="connect"))
+    eng.handle(dict(cmd="setup", call="N0CALL", radio="SIM"))
+    eng.handle(dict(cmd="fox", action="att", value=20))
+    assert not eng.handle(dict(cmd="start", mode="sweep", att_db=0))["ok"]
+    assert eng.handle(dict(cmd="start", mode="meter", att_db=0))["ok"]
+    seen = drain(q, lambda e: e["event"] == "state" and e["state"]["audio_set"])
+    assert eng._fox_raw.att == 0
+    readings = [e for e in seen if e["event"] == "reading"]
+    assert readings and readings[-1]["audio_hint"] == "OK", readings[-1:]
+    assert abs(eng.audio_set["peak_dbfs"] - (-12.0)) < 0.5, eng.audio_set
+    eng.handle(dict(cmd="stop"))
+    drain(q, lambda e: e["event"] == "state" and e["state"]["mode"] == "idle")
+    eng.handle(dict(cmd="setup", radio="ANOTHER"))
+    assert eng.audio_set is None, "another radio's volume isn't set"
+    eng.shutdown()

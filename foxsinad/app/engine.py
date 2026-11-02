@@ -28,7 +28,7 @@ import traceback
 from pathlib import Path
 
 from .. import sweep
-from ..analyzer import CLIP_LEVEL, NoAudio, peak_dbfs
+from ..analyzer import AUDIO_TARGET_DBFS, AUDIO_TOL_DB, CLIP_LEVEL, NoAudio, audio_hint, peak_dbfs
 from ..ballpark import hint
 from ..picofox import PicoFox, PicoFoxError, find_port, set_cabled
 from ..sweep import CalTable, Stopped, SweepError, level_reference, read_clean
@@ -37,16 +37,19 @@ WATCHDOG_S = 10.0
 STATUS_EVERY_S = 1.0
 METER_AVG_S = 0.25       # one analyzer window per meter reading: fast enough to adjust by
 METER_BOXCAR_S = 1.0     # the SINAD shown is the mean over this long
+AUDIO_SET_S = 2.0        # this long with the tone's peak on target sets the audio level
+AUDIO_SET_MIN_SINAD_DB = 20.0  # ... and the tone well above the noise (full quieting)
 LOST_AFTER_POLLS = 3     # failed status polls in a row (while idle) before the PicoFox counts as gone
 ID_INTERVAL_S = 540
 
 SETUP_DEFAULTS = dict(
     radio="", condition="", session="", note="", pad_db=None, call="",
     freq=145.55, tone=1000, dev=3000, repeat=1, monitor=False,
-    ballpark_att_db=16.0, cabled=False)
+    ballpark_att_db=16.0, audio_target_dbfs=AUDIO_TARGET_DBFS, cabled=False)
 
 NUMERIC = dict(pad_db=(0.0, 200.0), freq=(144.02, 147.98), tone=(100, 2400),
-               dev=(100, 10000), repeat=(1, 100), ballpark_att_db=(0.0, 31.75))
+               dev=(100, 10000), repeat=(1, 100), ballpark_att_db=(0.0, 31.75),
+               audio_target_dbfs=(-30.0, -3.0))
 INTEGER = {"tone", "dev", "repeat"}
 QUARTER_DB = {"ballpark_att_db"}      # the attenuator's 0.25 dB steps
 
@@ -107,6 +110,8 @@ class Engine:
         self.worker = None
         self.stop_evt = threading.Event()
         self.results = []             # this engine session's sweep results
+        self.audio_set = None         # the tone's peak once the radio's volume was set
+        self._start_att = None        # meter: the attenuator setting it was started with
 
         self._subs = []
         self._subs_lock = threading.Lock()
@@ -181,6 +186,7 @@ class Engine:
         return dict(mode=self.mode, connected=self.fox is not None, sim=self.sim,
                     hello=self.hello, port=getattr(self._fox_raw, "port", None),
                     setup=self.setup, cabled_confirmed=self.cabled_confirmed,
+                    audio_set=self.audio_set,
                     runs_dir=str(self.runs_dir))
 
     def _state_changed(self):
@@ -281,6 +287,8 @@ class Engine:
                                "equipment only, never an antenna)")
         retune = (new["freq"] != self.setup["freq"] and self.fox is not None
                   and self.mode != "sweep")        # a sweep holds its frequency
+        if new["radio"] != self.setup["radio"]:
+            self.audio_set = None             # another radio: its volume isn't set yet
         self.setup = new
         if retune:
             self.fox.set_freq(new["freq"])
@@ -296,9 +304,14 @@ class Engine:
         self.cabled_confirmed = bool(confirmed)
         self._state_changed()
 
-    def cmd_start(self, mode):
+    def cmd_start(self, mode, att_db=None):
+        """att_db (meter only): set the attenuator first, e.g. 0 to set the
+        radio's volume on a strong signal. Without it, meter leaves it as set."""
         if mode not in ("sweep", "ballpark", "meter"):
             raise CommandError(f"unknown mode {mode!r}")
+        if att_db is not None and mode != "meter":
+            raise CommandError(f"att_db is for meter, not {mode}")
+        self._start_att = None if att_db is None else round(_number(att_db, 0, 31.75, "att_db") * 4)
         self._require_idle(f"start {mode}")
         if mode in ("sweep", "ballpark") and self.fox is None:
             raise CommandError("connect the PicoFox first")
@@ -403,9 +416,12 @@ class Engine:
 
     def _reading_event(self, r, **extra):
         # No SINAD (every window clipped) goes out as null: JSON has no NaN.
+        pk, clipped = peak_dbfs(r.peak), r.peak >= CLIP_LEVEL
         self.emit("reading", sinad_db=_round(r.sinad_db, 2), std_db=_round(r.std_db, 3),
-                  peak_dbfs=round(peak_dbfs(r.peak), 1), clipped=r.peak >= CLIP_LEVEL,
-                  under_range=r.under_range, n_discarded=r.n_discarded, **extra)
+                  peak_dbfs=round(pk, 1), clipped=clipped, under_range=r.under_range,
+                  audio_hint=audio_hint(pk, self.setup["audio_target_dbfs"], clipped,
+                                        r.under_range),
+                  n_discarded=r.n_discarded, **extra)
 
     # -- modes (worker thread) ------------------------------------------------
     def _run_mode(self, mode):
@@ -435,6 +451,8 @@ class Engine:
             condition=s["condition"], note=s["note"], call=s["call"], cabled=s["cabled"],
             freq=s["freq"], tone=s["tone"], dev=s["dev"],
             settle=sweep.SETTLE_S, avg_coarse=sweep.AVG_COARSE_S, avg_fine=sweep.AVG_FINE_S,
+            audio_target_dbfs=s["audio_target_dbfs"],
+            audio_peak_dbfs=self.audio_set and self.audio_set["peak_dbfs"],
             tail_db=3.0, device=self.audio_device,
             port=None, cal=str(self.cal.path), monitor=False, live=False,
             runs_dir=self.runs_dir, af_input=af_input)
@@ -496,14 +514,19 @@ class Engine:
                 if self._fox_mode() == "OFF":
                     self._prepare_rf()
                 fox.set_freq(s["freq"])
+                if self._start_att is not None:
+                    fox.set_att(self._start_att)
                 fox.tone(s["tone"], s["dev"])
                 self._poll_once()
             # A reading every window, showing the boxcar mean of the last
             # second's SINAD (in dB); the peak stays the window's own, for
             # setting the volume. A window with no SINAD (clipped) empties it.
             box = collections.deque(maxlen=round(METER_BOXCAR_S / METER_AVG_S))
+            on_target = collections.deque(maxlen=round(AUDIO_SET_S / METER_AVG_S))
             while not self.stop_evt.is_set():
                 r = an.read(settle_s=0.0, avg_s=METER_AVG_S)
+                if fox is not None:
+                    self._track_audio(r, on_target)
                 if math.isnan(r.sinad_db):
                     box.clear()
                 else:
@@ -512,6 +535,22 @@ class Engine:
                                             std_db=statistics.pstdev(box))
                 self._reading_event(r)
         raise Stopped()
+
+    def _track_audio(self, r, on_target):
+        """The radio's volume counts as set after AUDIO_SET_S of the tone's
+        peak on target at full quieting; the peak goes with the next runs."""
+        pk = peak_dbfs(r.peak)
+        good = (r.peak < CLIP_LEVEL and not r.under_range and r.sinad_db >= AUDIO_SET_MIN_SINAD_DB
+                and abs(pk - self.setup["audio_target_dbfs"]) <= AUDIO_TOL_DB)
+        if not good:
+            on_target.clear()
+            return
+        on_target.append(pk)
+        if len(on_target) == on_target.maxlen:
+            level = round(statistics.median(on_target), 1)
+            if self.audio_set is None or abs(level - self.audio_set["peak_dbfs"]) >= 0.5:
+                self.audio_set = dict(peak_dbfs=level, t=time.time())
+                self._state_changed()
 
     # -- PicoFox status poll and the UI watchdog ------------------------------
     def _poll_once(self):

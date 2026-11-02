@@ -144,12 +144,17 @@ button.small { padding: 3px 10px; font-size: 13px; }
 .tag.err { background: var(--err-bg); color: var(--err); }
 .readout .sub { color: var(--ink2); font-size: 13px; font-variant-numeric: tabular-nums; flex-basis: 100%; min-height: 1.4em; }
 .audiolevel { flex-basis: 100%; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink2); }
-.lvlbar { flex: 1; max-width: 360px; height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }
-.lvlbar i { display: block; height: 100%; border-radius: 5px; }
+.lvlbar { position: relative; flex: 1; max-width: 360px; height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }
+.lvlbar i { position: relative; display: block; height: 100%; border-radius: 5px; }
+.lvlbar b.target { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--good) 28%, transparent); outline: 1px solid var(--good); outline-offset: -1px; }
 .lvlbar.good i { background: var(--good); }
 .lvlbar.warn i { background: var(--warn); }
 .lvlbar.err i { background: var(--err); }
 .lvlnum { min-width: 84px; font-variant-numeric: tabular-nums; }
+.lvlhint { min-width: 9.5em; font-weight: 600; }
+.lvlhint.good { color: var(--good); }
+.lvlhint.warn { color: var(--warn); }
+.lvlhint.err { color: var(--err); }
 .canvaswrap { position: relative; height: 380px; }
 @media (max-width: 720px) { .canvaswrap { height: 280px; } }
 canvas { display: block; width: 100%; height: 100%; }

@@ -79,6 +79,23 @@ def peak_dbfs(peak):
     return 20 * math.log10(max(peak, 1e-12))
 
 
+AUDIO_TARGET_DBFS = -10.0  # the radio's volume: where the tone's peak should sit
+AUDIO_TOL_DB = 3.0         # within this of the target is fine
+
+
+def audio_hint(peak_db, target=AUDIO_TARGET_DBFS, clipped=False, under_range=False):
+    """Which way to turn the radio's volume, from a window's peak (dBFS)."""
+    if under_range:
+        return "NO AUDIO"
+    if clipped:
+        return "CLIPPING: volume down"
+    if peak_db > target + AUDIO_TOL_DB:
+        return "volume down"
+    if peak_db < target - AUDIO_TOL_DB:
+        return "volume up"
+    return "OK"
+
+
 def make_bandpass(fs, hpf_hz=200.0, lpf_hz=3000.0):
     return filters.make_audio_filter(fs, hpf_hz, lpf_hz)
 

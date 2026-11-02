@@ -113,6 +113,24 @@ def test_finds_the_12db_point():
     print(f"PASS test_finds_the_12db_point: found {point:.2f} dBm (true {TRUE_12DB_DBM})")
 
 
+def test_a_tone_off_the_audio_target_warns_but_runs():
+    global CAL, FOX
+    CAL, FOX = sweep.CalTable(), StubFox()
+    FOX.statuses = 100                    # past the stub's scripted Morse IDs
+    sweep.RUNS = Path(tempfile.mkdtemp())
+    args = sweep.argparse.Namespace(
+        pad_db=PAD_DB, label="run", session=None, radio="stub", condition="bench",
+        note="", call="N0CALL", freq=145.55, tone=1000, dev=3000, settle=0.0,
+        avg_coarse=0.0, avg_fine=0.0, device=None, port=None, cal=str(sweep.DEFAULT_CAL),
+        monitor=None, tail_db=3.0, audio_target_dbfs=-20.0, audio_peak_dbfs=-19.5)
+    said = []
+    res = sweep.run(args, fox=FOX, an=StubAnalyzer(None), log=said.append)
+    assert res.point_dbm is not None
+    assert any("target" in m for m in said), said[:3]     # the stub peaks at -10.5 dBFS
+    assert "# audio_peak_dbfs: -19.5" in res.csv.read_text()
+    print("PASS test_a_tone_off_the_audio_target_warns_but_runs")
+
+
 def test_cabled_never_outlives_a_run():
     from foxsinad import picofox
     fox = StubFox()

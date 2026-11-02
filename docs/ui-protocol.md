@@ -28,14 +28,16 @@ Commands that change the PicoFox reply once the change has been made.
 | `disconnect` | | RF off, closes the PicoFox. Idle only. |
 | `setup` | any of the setup fields | updates the run setup; validates each field |
 | `confirm_cabled` | `confirmed`: bool | the operator's confirmation that the output goes only into a load or test equipment; lasts for this engine session. `false` also leaves cabled mode (idle only). |
-| `start` | `mode`: `sweep`, `ballpark`, `meter` | starts a mode. Idle only. Sweep and ballpark need a connected PicoFox and a callsign or cabled mode; sweep also needs `pad_db`. |
+| `start` | `mode`: `sweep`, `ballpark`, `meter`; `att_db` (meter only) | starts a mode. Idle only. Sweep and ballpark need a connected PicoFox; with one connected, every mode needs a callsign or cabled mode (`field: "call"`). A cabled sweep without `pad_db` runs, with levels as the PicoFox output. Meter with `att_db` sets the attenuator first (0: a strong signal for setting the radio's volume); without it, the attenuator stays as set. |
 | `stop` | | ends the running mode; RF off. When idle, turns RF off if it's on. |
 | `fox` | `action`, `value`, `dev` | manual control: `att` (value in dB, 0–31.75, rounded to 0.25), `freq` (MHz), `tone` (value = tone Hz, dev = Hz), `carrier`, `off`, `id`. Refused during a sweep; only `att` during ballpark. |
 
 **Setup fields** (`state.setup`): `radio`, `condition`, `session`, `note`
 (text); `pad_db` (0–200, or empty), `freq` (144.02–147.98 MHz), `tone`
 (100–2400 Hz), `dev` (100–10000 Hz), `repeat` (1–100), `ballpark_att_db`
-(0–31.75 dB, rounded to 0.25); `monitor`, `cabled` (bool).
+(0–31.75 dB, rounded to 0.25), `audio_target_dbfs` (−30 to −3, where
+the tone's peak should sit; OK within ±3 dB); `monitor`, `cabled` (bool).
+A refused field comes back as `field` in the error reply.
 `cabled: true` needs `confirm_cabled` first, and can only change while
 idle with RF off. `pad_db` is required for a cabled sweep only.
 
@@ -57,13 +59,15 @@ Every event has `event` and `t` (Unix time, seconds).
 | `run_started` | `label`, `index`, `of`, `pad_db`, `level_ref` | a sweep begins (`index` of `of` repeats) |
 | `point` | `phase` (`coarse`/`fine`), `att`, `gen_dbm`, `level_dbm`, `level_uv`, `sinad_db`, `sinad_sd`, `n`, `n_discarded`, `time`, `clipped` | one sweep reading |
 | `run_finished` | `label`, `csv`, `png`, `point_dbm`, `sigma_db`, `fit_points`, `index`, `of`, `radio`, `condition`, `session`, `pad_db`, `level_ref` | a sweep's result (`point_dbm` null if no 12 dB crossing) |
-| `reading` | `sinad_db`, `std_db`, `peak_dbfs`, `clipped`, `under_range`, `n_discarded`; ballpark adds `hint`, `att` (steps), `att_db`, `out_dbm`, `level_dbm`, `level_ref` | one 1 s reading in meter or ballpark |
+| `reading` | `sinad_db`, `std_db`, `peak_dbfs`, `clipped`, `under_range`, `audio_hint` (`OK`, `volume up`, `volume down`, `CLIPPING: volume down`, `NO AUDIO`, against `audio_target_dbfs`), `n_discarded`; ballpark adds `hint`, `att` (steps), `att_db`, `out_dbm`, `level_dbm`, `level_ref` | meter: every 0.25 s, SINAD the mean of the last 1 s; ballpark: every 1 s |
 | `fox_event` | `text` (`*ID START`, `*ID DONE`) | a Morse ID started or ended |
 | `log` | `level` (`info`, `warn`, `error`), `msg` | anything worth showing |
 
 **`state`**: `mode` (`idle`, `sweep`, `ballpark`, `meter`), `connected`,
 `sim`, `hello` (the PicoFox's `*IDN?`), `port`, `setup`,
-`cabled_confirmed`, `runs_dir`.
+`cabled_confirmed`, `runs_dir`, `audio_set` (null, or `peak_dbfs` and `t`:
+the tone's peak once meter has held it on target for 2 s at full quieting;
+cleared when `radio` changes; written into each run's header).
 
 **`status`**: the driver's fields as strings (`mode` OFF/CARRIER/TONE,
 `freq` MHz, `att` steps, `tone`, `dev`, `call`, `rev`, `since_id`, `up`,

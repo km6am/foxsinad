@@ -153,7 +153,7 @@ transport.events((ev) => {
     case "reading":
       S.readings.push({t: ev.t, sinad: ev.sinad_db, hint: ev.hint, level: ev.level_dbm,
                        ref: ev.level_ref, attDb: ev.att_db, clipped: ev.clipped,
-                       under: ev.under_range, peak: ev.peak_dbfs, mode: plotMode()});
+                       under: ev.under_range, peak: ev.peak_dbfs, audioHint: ev.audio_hint, mode: plotMode()});
       S.readings = S.readings.filter((r) => ev.t - r.t <= TIME_WINDOW_S + 5);
       renderReadout(); draw();
       break;
@@ -280,6 +280,8 @@ const FIELDS = [
   {sep: true, group: "setup"},
   {k: "repeat", label: "Repeat", unit: "sweeps", type: "number", step: "1", group: "sweep"},
   {k: "ballpark_att_db", label: "Ballpark attenuation", unit: "dB, PicoFox", type: "number", step: "0.25", group: "level"},
+  {k: "audio_target_dbfs", label: "Audio target", unit: "dBFS peak", type: "number", step: "1", group: "audio",
+   hint: "where the tone's peak should sit; set the radio's volume to it on a strong signal"},
   {k: "monitor", label: "Play the audio on the speakers", type: "checkbox", group: "setup"},
   {k: "cabled", label: "Cabled: no Morse ID", type: "checkbox", group: "setup"},
 ];
@@ -483,14 +485,21 @@ function renderReadout() {
 }
 
 // The sound card's peak level, for setting the radio's volume: a bar from
-// -60 to 0 dBFS, red when clipping, amber when too quiet to measure.
+// -60 to 0 dBFS with the target band marked; green on target, amber off it
+// or too quiet to measure, red when clipping.
+const AUDIO_TOL_DB = 3;     // as the engine's
+const dbfsPct = (db) => Math.max(0, Math.min(100, (db + 60) / 60 * 100));
 function audioLevel(r) {
   const have = r.peak !== null && r.peak !== undefined;
-  const pct = have ? Math.max(0, Math.min(100, (r.peak + 60) / 60 * 100)) : 0;
-  const cls = r.clipped ? "err" : r.under ? "warn" : "good";
-  return `<div class="audiolevel" title="Peak audio level at the sound card">
-    <span class="lbl">Audio</span><span class="lvlbar ${cls}"><i style="width:${pct.toFixed(1)}%"></i></span>
-    <span class="lvlnum">${fmt(r.peak, 1)} dBFS</span></div>`;
+  const pct = have ? dbfsPct(r.peak) : 0;
+  const hint = r.audioHint || "";
+  const cls = r.clipped ? "err" : (r.under || (hint && hint !== "OK")) ? "warn" : "good";
+  const target = S.state && S.state.setup.audio_target_dbfs;
+  const band = target === undefined || target === null ? "" :
+    `<b class="target" style="left:${dbfsPct(target - AUDIO_TOL_DB).toFixed(1)}%;width:${(dbfsPct(target + AUDIO_TOL_DB) - dbfsPct(target - AUDIO_TOL_DB)).toFixed(1)}%"></b>`;
+  return `<div class="audiolevel" title="Peak audio level at the sound card; the band is the target">
+    <span class="lbl">Audio</span><span class="lvlbar ${cls}">${band}<i style="width:${pct.toFixed(1)}%"></i></span>
+    <span class="lvlnum">${fmt(r.peak, 1)} dBFS</span><span class="lvlhint ${cls}">${esc(hint === "OK" ? "on target" : hint)}</span></div>`;
 }
 
 function renderResults() {

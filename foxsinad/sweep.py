@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .analyzer import CLIP_LEVEL, SinadAnalyzer, pick_device, pick_monitor
+from .analyzer import AUDIO_TOL_DB, CLIP_LEVEL, SinadAnalyzer, peak_dbfs, pick_device, pick_monitor
 from .picofox import PicoFox, PicoFoxError, set_cabled
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -290,6 +290,10 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
             if r.under_range:
                 raise SweepError("no audio. Check the cable, the LINE switch, the radio's "
                                  "volume, and that its squelch is open.")
+            target = getattr(args, "audio_target_dbfs", None)
+            if target is not None and abs(peak_dbfs(r.peak) - target) > AUDIO_TOL_DB:
+                log(f"warning: the tone peaks at {peak_dbfs(r.peak):.1f} dBFS at full level, "
+                    f"{target:g} dBFS is the target (set the radio's volume in Audio)")
             if r.sinad_db < TARGET_DB:
                 raise SweepError(f"SINAD is only {r.sinad_db:.1f} dB at full level "
                                  f"({top:.1f} dBm {ref_text}). Use less fixed attenuation.")
@@ -363,6 +367,8 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
         freq_mhz=args.freq, offset_db=-pad, dev_khz=args.dev / 1000,
         tone_hz=args.tone, avg_s=args.avg_fine, avg_coarse_s=args.avg_coarse,
         settle_s=args.settle, radio=args.radio or "(none)",
+        audio_peak_dbfs=getattr(args, "audio_peak_dbfs", None),
+        audio_target_dbfs=getattr(args, "audio_target_dbfs", None),
         condition=args.condition or "(none)", note=args.note,
         station_call=(args.call or "").upper() or "(not set)",
         cabled="yes (no Morse ID)" if cabled else "no",
