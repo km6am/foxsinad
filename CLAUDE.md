@@ -45,8 +45,9 @@ pushing one):
   `toneBtn`, `carrierBtn`, `offBtn`, `idBtn`, `freqBtn`, `manualHint`,
   `log`, `cabledDialog`, `toast`) and uses the CSS tokens `app.css`
   defines. Renaming an id or a token breaks rfbench's page.
-- foxsinad's own page is the workflow tabs (`#tabbar`, `.tabpanel`,
-  `#fields-<group>`, the strip's `#stripSinad`/`#stripAudio`, `#rfState`);
+- foxsinad's own page is the session wizard (`#tabbar` steps, `.tabpanel`,
+  `#fields-<group>`, `#wizNav`, `#padDialog`, the strip's
+  `#stripSinad`/`#stripAudio`, `#rfState`);
   rfbench's page has none of those. So every hook added to `app.js` must
   look for its element and do nothing without it (`TABBED`, `if ($(...))`),
   and `buildSetup()` falls back to `#setup`. Check rfbench's page in a

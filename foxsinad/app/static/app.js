@@ -47,19 +47,23 @@ const S = {
   log: [],
   foxEvents: [],
   selectedMode: loadPref("mode", "sweep"),
-  tab: loadPref("tab", "setup"),
+  tab: loadPref("tab", "session"),
   linkOk: false,
 };
 const TIME_WINDOW_S = 120;
 const RECORD_WINDOW_S = 300;     // record shows more history
 const windowFor = (mode) => (mode === "record" ? RECORD_WINDOW_S : TIME_WINDOW_S);
 
-// The workflow tabs (foxsinad's page; a page without #tabbar, such as
-// rfbench's, keeps the Sweep/Ballpark/Meter buttons). Each step's tab picks
-// the mode Start runs; Setup and the tools tab run none.
+// The session wizard (foxsinad's page; a page without #tabbar, such as
+// rfbench's, keeps the Sweep/Ballpark/Meter buttons): Session, Radio,
+// Levels, Sweep, Finish, with Record and the tools under the ⋯ step. Each
+// step picks the mode Start runs; Levels is the meter at the ballpark
+// attenuation, setting the volume and the attenuation at once.
 const TABBED = !!document.getElementById("tabbar");
-const TAB_MODE = {setup: null, audio: "meter", level: "ballpark", sweep: "sweep", record: "record", tools: null};
-const MODE_TAB = {meter: "audio", ballpark: "level", sweep: "sweep", record: "record"};
+const STEPS = ["session", "radio", "levels", "sweep", "finish"];
+const TAB_MODE = {session: null, radio: null, levels: "meter", sweep: "sweep", finish: null,
+                  record: "record", tools: null};
+const MODE_TAB = {meter: "levels", ballpark: "levels", sweep: "sweep", record: "record"};
 const TARGET_DB = 12;
 
 // What a level means. Only a cabled path gives the level at the radio;
@@ -172,6 +176,8 @@ transport.events((ev) => {
                        ref: ev.level_ref, attDb: ev.att_db, clipped: ev.clipped,
                        under: ev.under_range, peak: ev.peak_dbfs, audioHint: ev.audio_hint,
                        box: ev.boxcar_db, id: ev.id_active, mode: plotMode()});
+      // the wizard's Levels step is the meter, with ballpark's advice on the level
+      if (TABBED && !ev.hint && ev.level_hint) S.readings[S.readings.length - 1].hint = ev.level_hint;
       S.readings = S.readings.filter((r) => ev.t - r.t <= windowFor(plotMode()) + 5);
       renderReadout(); draw();
       break;
@@ -198,14 +204,15 @@ document.querySelectorAll(".seg").forEach((b) => b.addEventListener("click", () 
   renderHeader(); renderReadout(); draw();
 }));
 // Every mode needs the PicoFox, so until it's connected this button connects it.
-// The Audio step sets the volume on the strongest signal, so it starts at ATT 0.
+// The Levels step starts the PicoFox at the ballpark attenuation.
 $("startBtn").addEventListener("click", () => {
   if (!S.state.connected) return send({cmd: "connect"});
   const mode = tabMode();
   if (!mode) return;
   if (!S.state.setup.cabled && !callsignEntered()) return needCallsign();
   if (mode !== "sweep") S.readings = [];
-  send(TABBED && S.tab === "audio" ? {cmd: "start", mode, att_db: 0} : {cmd: "start", mode});
+  send(TABBED && S.tab === "levels" ? {cmd: "start", mode, att_db: S.state.setup.ballpark_att_db}
+                                     : {cmd: "start", mode});
 });
 $("stopBtn").addEventListener("click", () => send({cmd: "stop"}));
 
@@ -220,7 +227,7 @@ const MODE_HELP = {
        + "at the setup's frequency and the attenuator as set; Stop turns RF off.",
   record: "Holds one level and records SINAD every 0.25 s until Stop.",
 };
-const MODE_NAME = {meter: "Audio", ballpark: "Level", sweep: "Sweep", record: "Record"};
+const MODE_NAME = {meter: "Levels", ballpark: "Ballpark", sweep: "Sweep", record: "Record"};
 
 function renderHeader() {
   const st = S.state;
@@ -239,6 +246,7 @@ function renderHeader() {
   const name = (m) => (TABBED ? MODE_NAME[m] : `${m[0].toUpperCase()}${m.slice(1)}`);
   $("runState").textContent = !st ? "" : running() ? `${name(st.mode)} running` : "Idle";
   renderRf(rfOn);
+  renderStrip();
   $("cabledBanner").hidden = !(st && st.setup.cabled);
   if ($("modeHelp")) $("modeHelp").textContent = MODE_HELP[mode];
   const ref = S.run && running() ? S.run.ref : setupRef();
@@ -316,10 +324,10 @@ function stepDone(t) {
   const s = st.setup;
   const mine = (r) => (r.radio || "") === (s.radio || "");
   switch (t) {
-    case "setup": return !!(st.connected && (s.call || s.cabled) && s.freq);
-    case "audio": return !!st.audio_set;
-    case "level": return s.pad_db !== null && s.pad_db !== undefined;
-    case "sweep": return S.results.some((r) => mine(r) && r.point_dbm !== null);
+    case "session": return !!(st.connected && (s.call || s.cabled) && s.freq);
+    case "radio": return !!s.radio;
+    case "levels": return !!st.audio_set && s.pad_db !== null && s.pad_db !== undefined;
+    case "sweep": return !!s.radio && S.results.some((r) => mine(r) && r.point_dbm !== null);
     case "record": return S.records.some(mine);
     default: return false;
   }
@@ -330,11 +338,13 @@ function renderSteps() {
   const runTab = running() ? MODE_TAB[S.state.mode] : null;
   document.querySelectorAll(".tab").forEach((b) => {
     const t = b.dataset.tab;
-    b.setAttribute("aria-selected", String(t === S.tab));
+    b.setAttribute("aria-selected", String(t === S.tab || (t === "tools" && S.tab === "record")));
     b.classList.toggle("done", stepDone(t));
     b.classList.toggle("running", t === runTab);
   });
   renderStepNotes();
+  renderWizNav();
+  renderSummary();
 }
 
 function renderStepNotes() {
@@ -342,8 +352,8 @@ function renderStepNotes() {
   if (!st) return;
   const a = st.audio_set;
   $("audioSet").innerHTML = a
-    ? `<span class="tag good">Audio set: ${fmt(a.peak_dbfs, 1)} dBFS peak</span>`
-    : `<span class="muted">Not set yet for this radio.</span>`;
+    ? `<span class="tag good">Volume set: ${fmt(a.peak_dbfs, 1)} dBFS peak</span>`
+    : `<span class="muted">Volume not set yet for this radio (the audio bar, top).</span>`;
   const r = recordStart();
   $("recordStart").innerHTML = r
     ? `Starts at <strong>${attText(r.att / 4)}</strong>${r.out === null ? "" : `, ${fmt(r.out - (st.setup.pad_db || 0), 1)} dBm ${REF[setupRef()].text}`} <span class="muted">(${esc(r.why)})</span>`
@@ -372,15 +382,169 @@ function recordStart() {
   return {att, why, out: calDbm(att)};
 }
 
-if (TABBED) {
-  $("nextRadioBtn").addEventListener("click", async () => {
-    if (running()) return toast("Stop first");
-    const r = await send({cmd: "setup", radio: "", pad_db: ""});
-    if (!r.ok) return;
+// ---- the wizard's buttons --------------------------------------------------------
+// Back / Next under each step; after a sweep: redo it, save and go on to the
+// next radio, or finish the session. Sweeps are saved as they finish; "save"
+// here means keeping it and moving on.
+function renderWizNav() {
+  const nav = $("wizNav");
+  if (!nav || !S.state) return;
+  const st = S.state, t = S.tab, i = STEPS.indexOf(t);
+  const sweeping = running() && st.mode === "sweep";
+  const b = (act, label, cls = "", dis = false) =>
+    `<button type="button" data-act="${act}" class="${cls}"${dis || wizBusy ? " disabled" : ""}>${label}</button>`;
+  let html = "";
+  if (i < 0) { nav.hidden = true; return; }
+  nav.hidden = false;
+  if (i > 0) html += b("back", "← Back", "", sweeping);
+  if (t === "session") html += b("next", st.connected ? "Next: radio →" : "Connect · next →", "primary");
+  else if (t === "radio") html += b("next", "Next: levels →", "primary");
+  else if (t === "levels") html += b("next", "Next: sweep →", "primary");
+  else if (t === "sweep") {
+    const mine = S.results.filter((r) => (r.radio || "") === (st.setup.radio || ""));
+    if (sweeping) html += `<span class="navnote">Sweeping … Stop is at the top.</span>`;
+    else if (!mine.length) html += b("sweep", "Start sweep", "primary");
+    else html += b("sweep", "Redo sweep") + b("nextRadio", "Save · next radio", "primary") + b("finish", "Finish");
+  } else if (t === "finish") html += b("newSession", "New session", "primary");
+  nav.innerHTML = html;
+}
+
+let wizBusy = false;
+async function wizAct(act) {
+  if (wizBusy) return;
+  wizBusy = true; renderWizNav();
+  try { await WIZ[act](); } finally { wizBusy = false; renderWizNav(); }
+}
+
+async function stopAndWait() {
+  if (!running()) return true;
+  await transport.send({cmd: "stop"});
+  for (let i = 0; i < 80 && running(); i++) await new Promise((r) => setTimeout(r, 100));
+  return !running();
+}
+
+// A field as typed counts, even if its change hasn't reached the engine yet.
+async function flushField(k) {
+  const input = $(`f_${k}`);
+  if (input && input.value !== String(S.state.setup[k] ?? "")) {
+    const r = await send({cmd: "setup", [k]: input.value});
+    if (!r.ok) return false;
+  }
+  return true;
+}
+
+async function startSweep() {
+  if (!(await stopAndWait())) return toast("couldn't stop the running mode");
+  S.readings = [];
+  selectTab("sweep");
+  await send({cmd: "start", mode: "sweep"});
+}
+
+const WIZ = {
+  back: async () => {
+    const i = STEPS.indexOf(S.tab);
+    if (S.tab === "levels" && running() && S.state.mode === "meter") await stopAndWait();
+    selectTab(STEPS[Math.max(0, i - 1)]);
+  },
+  next: async () => {
+    if (S.tab === "session") {
+      for (const k of ["session", "call", "freq"]) if (!(await flushField(k))) return;
+      if (!S.state.connected && !(await send({cmd: "connect"})).ok) return;
+      if (!S.state.setup.cabled && !callsignEntered()) return needCallsign();
+      selectTab("radio");
+      focusField("radio");
+    } else if (S.tab === "radio") {
+      for (const k of ["radio", "condition", "note"]) if (!(await flushField(k))) return;
+      if (!S.state.setup.radio) { toast("Name the radio"); return goToField("radio"); }
+      if (!(await stopAndWait())) return;
+      S.readings = [];
+      selectTab("levels");
+      await send({cmd: "start", mode: "meter", att_db: S.state.setup.ballpark_att_db});
+    } else if (S.tab === "levels") {
+      const pad = await askPad();
+      if (pad === null) return;
+      await startSweep();
+    }
+  },
+  sweep: startSweep,
+  nextRadio: async () => {
+    if (S.run && S.run.points.length) { S.prevRuns.push(S.run.points); S.run = null; }
+    if (!(await send({cmd: "setup", radio: "", condition: S.state.setup.condition, note: ""})).ok) return;
     S.readings = [];
-    selectTab("setup");
-    goToField("radio");
+    selectTab("radio");
+    focusField("radio");
+  },
+  finish: async () => {
+    await stopAndWait();
+    if (S.status && S.status.mode && S.status.mode !== "OFF") await send({cmd: "stop"});
+    selectTab("finish");
+  },
+  newSession: async () => {
+    if (!(await send({cmd: "setup", session: "", radio: "", note: ""})).ok) return;
+    S.run = null; S.prevRuns = []; S.readings = [];
+    selectTab("session");
+    focusField("session");
+  },
+};
+
+// The attenuation, asked for every time the sweep is about to start: the
+// last value is offered, selected, so typing replaces it.
+function askPad() {
+  const d = $("padDialog"), input = $("padInput"), err = $("padErr");
+  const last = S.state.setup.pad_db;
+  input.value = last === null || last === undefined ? "" : last;
+  err.hidden = true;
+  return new Promise((resolve) => {
+    const done = async (e) => {
+      if (d.returnValue !== "ok") { cleanup(); return resolve(null); }
+      const r = await transport.send({cmd: "setup", pad_db: input.value});
+      if (!r.ok || input.value.trim() === "") {
+        err.textContent = r.ok ? "Enter the attenuation (0 if there is none)." : r.error;
+        err.hidden = false;
+        d.returnValue = ""; d.showModal(); input.focus(); input.select();
+        return;
+      }
+      cleanup(); resolve(+input.value);
+    };
+    const cleanup = () => d.removeEventListener("close", done);
+    d.addEventListener("close", done);
+    d.returnValue = "";
+    d.showModal();
+    input.focus(); input.select();
   });
+}
+
+function focusField(k) {
+  const input = $(`f_${k}`);
+  if (!input) return;
+  input.scrollIntoView({block: "center"});
+  input.focus({preventScroll: true});
+}
+
+// Finish: this session's sweeps, one row per run.
+function renderSummary() {
+  const el = $("summary");
+  if (!el || !S.state) return;
+  const sess = S.state.setup.session || "";
+  const rs = S.results.filter((r) => (r.session || "") === sess);
+  if (!rs.length) { el.innerHTML = `<span class="muted">No sweeps in this session yet.</span>`; return; }
+  const refs = [...new Set(rs.map((r) => r.level_ref || "radio"))];
+  el.innerHTML = `<table><thead><tr><th>Radio</th><th class="num">12 dB SINAD (dBm)</th>
+    <th class="num">±</th><th class="num">Atten. (dB)</th><th class="num">Volume (dBFS)</th></tr></thead><tbody>
+    ${rs.map((r) => `<tr title="${esc(r.csv)}"><td>${esc(r.radio || "–")}${r.condition ? ` <span class="muted">${esc(r.condition)}</span>` : ""}${refs.length > 1 ? ` <span class="muted">${REF[r.level_ref || "radio"].text}</span>` : ""}</td>
+      <td class="num">${r.point_dbm === null ? "none" : fmt(r.point_dbm, 2)}</td>
+      <td class="num">${r.sigma_db === null ? "–" : fmt(r.sigma_db, 2)}</td>
+      <td class="num">${fmt(r.pad_db, 1)}</td><td class="num">${fmt(r.audio_peak_dbfs, 1)}</td></tr>`).join("")}</tbody></table>
+    <p class="hint">${refs.length === 1 ? `Levels are ${REF[refs[0]].text}. ` : ""}± is each fit's own uncertainty; repeat sweeps show the real spread.</p>
+    <p class="hint">${sess ? `Session “${esc(sess)}”. ` : ""}The CSVs are in ${esc(rs[0].csv.replace(/\/[^/]*$/, ""))}.</p>`;
+}
+
+if (TABBED) {
+  $("wizNav").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (btn) wizAct(btn.dataset.act);
+  });
+  $("openRecordBtn").addEventListener("click", () => selectTab("record"));
   document.querySelectorAll(".stepper button").forEach((b) => b.addEventListener("click", () => {
     const att = S.status && +S.status.att;
     if (att === undefined || Number.isNaN(att)) return;
@@ -404,27 +568,26 @@ function renderRecords() {
 }
 
 // ---- run setup -------------------------------------------------------------------
-// group: the workflow tab a field belongs on (a page without tabs puts them
+// group: the wizard step a field belongs on (a page without them puts them
 // all in #setup, in this order).
 const FIELDS = [
-  {k: "session", label: "Session", type: "text", hint: "runs are grouped in a folder of this name", group: "setup"},
-  {k: "call", label: "Callsign", type: "text", group: "setup"},
-  {k: "freq", label: "Frequency", unit: "MHz", type: "number", step: "0.005", group: "setup"},
-  {k: "cabled", label: "Cabled: no Morse ID", type: "checkbox", group: "setup"},
-  {sep: true, group: "setup"},
-  {k: "radio", label: "Radio", type: "text", group: "setup"},
-  {k: "condition", label: "Condition", type: "text", hint: "bench, antenna, summit …", group: "setup"},
-  {k: "note", label: "Note", type: "text", group: "setup"},
-  {sep: true, group: "setup"},
-  {k: "tone", label: "Tone", unit: "Hz", type: "number", step: "1", group: "setup"},
-  {k: "dev", label: "Deviation", unit: "Hz, commanded", type: "number", step: "100", group: "setup"},
-  {k: "monitor", label: "Play the audio on the speakers", type: "checkbox", group: "setup"},
-  {k: "audio_target_dbfs", label: "Audio target", unit: "dBFS peak", type: "number", step: "1", group: "audio",
+  {k: "session", label: "Session", type: "text", hint: "the summit, say; runs are grouped in a folder of this name", group: "session"},
+  {k: "call", label: "Callsign", type: "text", group: "session"},
+  {k: "freq", label: "Frequency", unit: "MHz", type: "number", step: "0.005", group: "session"},
+  {k: "cabled", label: "Cabled: no Morse ID", type: "checkbox", group: "session"},
+  {sep: true, group: "session"},
+  {k: "radio", label: "Radio", type: "text", group: "radio"},
+  {k: "condition", label: "Condition", type: "text", hint: "bench, antenna, summit …", group: "radio"},
+  {k: "note", label: "Note", type: "text", group: "radio"},
+  {k: "tone", label: "Tone", unit: "Hz", type: "number", step: "1", group: "session"},
+  {k: "dev", label: "Deviation", unit: "Hz, commanded", type: "number", step: "100", group: "session"},
+  {k: "monitor", label: "Play the audio on the speakers", type: "checkbox", group: "session"},
+  {k: "audio_target_dbfs", label: "Audio target", unit: "dBFS peak", type: "number", step: "1", group: "levels",
    hint: "where the tone's peak should sit; set the radio's volume to it on a strong signal"},
-  {k: "ballpark_att_db", label: "Ballpark attenuation", unit: "dB, PicoFox", type: "number", step: "0.25", group: "level"},
-  {k: "pad_db", label: "External attenuation", unit: "dB", type: "number", step: "0.1", group: "level",
+  {k: "ballpark_att_db", label: "Ballpark attenuation", unit: "dB, PicoFox", type: "number", step: "0.25", group: "levels"},
+  {k: "pad_db", label: "External attenuation", unit: "dB", type: "number", step: "0.1", group: "levels",
    hint: "between the PicoFox and the radio (cabled) or its antenna. Needed for cabled sweeps: only then is the level at the radio known."},
-  {k: "repeat", label: "Repeat", unit: "sweeps", type: "number", step: "1", group: "sweep"},
+  {k: "repeat", label: "Repeat", unit: "sweeps per radio", type: "number", step: "1", group: "session"},
   {k: "record_att_db", label: "Record level", unit: "dB, PicoFox; empty: automatic", type: "number", step: "0.25", group: "record"},
 ];
 
@@ -807,7 +970,7 @@ function drawTime(W, H, mode) {
   const y1 = Math.max(30, Math.ceil(Math.max(0, ...pts.map((p) => p.sinad)) / 5) * 5 + 2);
   const {X, Y, f} = axes(W, H, -span, 0, 0, y1, "seconds ago", (v) => String(-v));
   if (mode === "record" && pts.length) return drawRecord(pts, now, X, Y, f);
-  if (mode === "ballpark") {
+  if (mode === "ballpark" || (TABBED && mode === "meter")) {
     ctx.fillStyle = css("--band");
     ctx.fillRect(f.l, Y(16), f.r - f.l, Y(9) - Y(16));
     ctx.fillStyle = css("--good"); ctx.textAlign = "right"; ctx.textBaseline = "top";
@@ -908,6 +1071,6 @@ if (TABBED) {
   // the tab bar sticks just under the strip, whose height changes with its contents
   const strip = document.querySelector(".strip");
   new ResizeObserver(() => document.documentElement.style.setProperty("--strip-h", `${strip.offsetHeight}px`)).observe(strip);
-  selectTab(S.tab in TAB_MODE ? S.tab : "setup");
+  selectTab(STEPS.includes(S.tab) ? S.tab : "session");     // the ⋯ pages aren't restored
 }
 renderAll();

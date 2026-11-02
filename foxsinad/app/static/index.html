@@ -23,12 +23,12 @@
 </header>
 
 <nav id="tabbar" class="tabbar" role="tablist" aria-label="Steps">
-  <button type="button" class="tab" role="tab" data-tab="setup"><span>Setup</span><i class="tick" aria-hidden="true"></i></button>
-  <button type="button" class="tab" role="tab" data-tab="audio"><span>Audio</span><i class="tick" aria-hidden="true"></i></button>
-  <button type="button" class="tab" role="tab" data-tab="level"><span>Level</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab" role="tab" data-tab="session"><span>Session</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab" role="tab" data-tab="radio"><span>Radio</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab" role="tab" data-tab="levels"><span>Levels</span><i class="tick" aria-hidden="true"></i></button>
   <button type="button" class="tab" role="tab" data-tab="sweep"><span>Sweep</span><i class="tick" aria-hidden="true"></i></button>
-  <button type="button" class="tab" role="tab" data-tab="record"><span>Record</span><i class="tick" aria-hidden="true"></i></button>
-  <button type="button" class="tab" role="tab" data-tab="tools" aria-label="Tools"><span>⋯</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab" role="tab" data-tab="finish"><span>Finish</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab more" role="tab" data-tab="tools" aria-label="More: record, PicoFox, log"><span>⋯</span><i class="tick" aria-hidden="true"></i></button>
 </nav>
 
 <div id="linkBanner" class="banner err" hidden>
@@ -40,51 +40,47 @@
 </div>
 
 <main class="tabs">
-  <section class="tabpanel" data-tab="setup" role="tabpanel">
+  <section class="tabpanel" data-tab="session" role="tabpanel">
     <div class="pane">
-      <h2>Setup</h2>
-      <p class="hint">Once per session: the session (summit) name, your callsign and the
-        frequency; then the radio under test. Cabled: the PicoFox goes through attenuators
-        into the radio's antenna jack. Over the air: it radiates, through an attenuator,
-        while the radio is on its own antenna.</p>
-      <form id="fields-setup" class="fields" autocomplete="off" novalidate></form>
+      <h2>Session</h2>
+      <p class="hint">Once per summit: its name, your callsign and the frequency. Cabled: the
+        PicoFox goes through attenuators into the radio's antenna jack, with no Morse ID.</p>
+      <form id="fields-session" class="fields" autocomplete="off" novalidate></form>
     </div>
   </section>
 
-  <section class="tabpanel" data-tab="audio" role="tabpanel" hidden>
+  <section class="tabpanel" data-tab="radio" role="tabpanel" hidden>
+    <div class="pane">
+      <h2>Radio</h2>
+      <p class="hint">The radio under test. Tune it to the session's frequency and open its
+        squelch. Next starts the tone at the ballpark attenuation.</p>
+      <form id="fields-radio" class="fields" autocomplete="off" novalidate></form>
+    </div>
+  </section>
+
+  <section class="tabpanel" data-tab="levels" role="tabpanel" hidden>
     <div class="pane controls">
-      <h2>Audio</h2>
-      <p class="hint">Start transmits the tone at full level (strongest signal). Open the radio's
-        squelch and turn its volume until the audio bar sits in the target band; it's recorded
-        after 2 s on target and goes with each run.</p>
-      <form id="fields-audio" class="fields" autocomplete="off" novalidate></form>
+      <h2>Levels</h2>
+      <p class="hint">Two things at once: turn the radio's <strong>volume</strong> until the audio
+        bar sits in its target band, and change the <strong>external attenuator</strong> until
+        SINAD reads about 12 dB (the green band). Next asks for the attenuation and starts the
+        sweep.</p>
       <div id="audioSet" class="stepnote"></div>
-    </div>
-    <div class="plothost"></div>
-  </section>
-
-  <section class="tabpanel" data-tab="level" role="tabpanel" hidden>
-    <div class="pane controls">
-      <h2>Level</h2>
-      <p class="hint">Start transmits at the ballpark attenuation. Change the external
-        attenuator until SINAD reads about 12 dB (the green band), Stop, then enter the total
-        external attenuation (attenuators and cables). Cabled, that makes levels the level at
-        the radio; over the air, it's a note of the setup.</p>
-      <form id="fields-level" class="fields" autocomplete="off" novalidate></form>
+      <form id="fields-levels" class="fields" autocomplete="off" novalidate></form>
     </div>
     <div class="plothost"></div>
   </section>
 
   <section class="tabpanel" data-tab="sweep" role="tabpanel" hidden>
-    <div class="pane controls">
-      <h2>Sweep</h2>
-      <p class="hint">Steps the PicoFox down through its range and finds the 12 dB SINAD point.
-        Repeat runs it several times; their spread is the honest error bar.</p>
-      <form id="fields-sweep" class="fields" autocomplete="off" novalidate></form>
-      <div class="buttons"><button type="button" id="nextRadioBtn" title="Keeps the session; clears the radio, its audio level and its attenuation">Next radio</button></div>
-    </div>
     <div class="plothost"></div>
     <div class="pane wide"><h2>Sweeps this session</h2><div id="results" class="results"><span class="muted">none yet</span></div></div>
+  </section>
+
+  <section class="tabpanel" data-tab="finish" role="tabpanel" hidden>
+    <div class="pane wide">
+      <h2>Session summary</h2>
+      <div id="summary" class="results"></div>
+    </div>
   </section>
 
   <section class="tabpanel" data-tab="record" role="tabpanel" hidden>
@@ -109,6 +105,14 @@
   </section>
 
   <section class="tabpanel" data-tab="tools" role="tabpanel" hidden>
+    <div class="pane">
+      <h2>More</h2>
+      <div class="buttons">
+        <button type="button" id="openRecordBtn">Record SINAD over time</button>
+      </div>
+      <p class="hint">Outside the session steps: hold one level and watch SINAD, for desense
+        that comes and goes.</p>
+    </div>
     <div class="pane" aria-labelledby="foxTitle">
       <div class="panehead">
         <h2 id="foxTitle">PicoFox</h2>
@@ -155,6 +159,24 @@
     <div id="tip" class="tip" hidden></div>
   </div>
 </section>
+
+<!-- Back / Next, and the choices at the end of a sweep -->
+<div id="wizNav" class="wiznav"></div>
+
+<dialog id="padDialog">
+  <form method="dialog" id="padForm">
+    <h2>External attenuation</h2>
+    <p>The total between the PicoFox and the radio (cabled) or its antenna: the attenuators
+       as set now, plus fixed pads and cables.</p>
+    <label class="field"><span>Attenuation <span class="unit">(dB)</span></span>
+      <input type="number" id="padInput" step="0.1" inputmode="decimal" required></label>
+    <p class="err" id="padErr" hidden></p>
+    <div class="buttons end">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button value="ok" class="primary">Start the sweep</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="cabledDialog">
   <form method="dialog">

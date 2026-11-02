@@ -597,7 +597,7 @@ class Engine:
         """With the PicoFox transmitting, a meter reading also says the level
         (from the last status poll) and, as level_hint, what ballpark would
         say about it - so one step sets the volume and the attenuation."""
-        out = dict(level_hint=hint(r, stop="go on"))
+        out = dict(level_hint=hint(r, stop="press Next"))
         if self.last_status:
             att = _att_steps(self.last_status)
             lvl, ref = self._level(self.cal.dbm(att))
