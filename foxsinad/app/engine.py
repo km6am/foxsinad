@@ -171,7 +171,7 @@ class Engine:
             raw = SimFox(speed=self.sim_speed,
                          **{k: v for k, v in self.sim_options.items() if k in ("id_interval_s", "version")})
         else:
-            raw = PicoFox(self.fox_port or find_port())
+            raw = self._open_fox()
         self._fox_raw = raw
         self.fox = _Locked(raw, self.fox_lock)
         self.hello = self.fox.hello()
@@ -318,6 +318,11 @@ class Engine:
             set_cabled(self.fox, False)
         except Exception as e:      # still report, never mask the original problem
             self.log(f"turning RF off failed: {e}", "error")
+
+    def _open_fox(self):
+        """The real PicoFox's driver, opened. The phone's engine overrides
+        this to use Android's USB link instead of a serial port."""
+        return PicoFox(self.fox_port or find_port())
 
     def _open_analyzer(self):
         if self.sim:
