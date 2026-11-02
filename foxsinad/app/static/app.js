@@ -263,29 +263,32 @@ function goToField(k) {
 }
 
 // ---- run setup -------------------------------------------------------------------
+// group: the workflow tab a field belongs on (a page without tabs puts them
+// all in #setup, in this order).
 const FIELDS = [
-  {k: "radio", label: "Radio", type: "text"},
-  {k: "condition", label: "Condition", type: "text", hint: "bench, antenna, summit …"},
-  {k: "session", label: "Session", type: "text", hint: "runs are grouped in a folder of this name"},
-  {k: "note", label: "Note", type: "text"},
-  {sep: true},
-  {k: "pad_db", label: "External attenuation", unit: "dB", type: "number", step: "0.1",
+  {k: "radio", label: "Radio", type: "text", group: "setup"},
+  {k: "condition", label: "Condition", type: "text", hint: "bench, antenna, summit …", group: "setup"},
+  {k: "session", label: "Session", type: "text", hint: "runs are grouped in a folder of this name", group: "setup"},
+  {k: "note", label: "Note", type: "text", group: "setup"},
+  {sep: true, group: "setup"},
+  {k: "pad_db", label: "External attenuation", unit: "dB", type: "number", step: "0.1", group: "level",
    hint: "between the PicoFox and the radio (cabled) or its antenna. Needed for cabled sweeps: only then is the level at the radio known."},
-  {k: "call", label: "Callsign", type: "text"},
-  {k: "freq", label: "Frequency", unit: "MHz", type: "number", step: "0.005"},
-  {k: "tone", label: "Tone", unit: "Hz", type: "number", step: "1"},
-  {k: "dev", label: "Deviation", unit: "Hz, commanded", type: "number", step: "100"},
-  {sep: true},
-  {k: "repeat", label: "Repeat", unit: "sweeps", type: "number", step: "1"},
-  {k: "ballpark_att_db", label: "Ballpark attenuation", unit: "dB, PicoFox", type: "number", step: "0.25"},
-  {k: "quick", label: "Quick sweep (shorter readings)", type: "checkbox"},
-  {k: "monitor", label: "Play the audio on the speakers", type: "checkbox"},
-  {k: "cabled", label: "Cabled: no Morse ID", type: "checkbox"},
+  {k: "call", label: "Callsign", type: "text", group: "setup"},
+  {k: "freq", label: "Frequency", unit: "MHz", type: "number", step: "0.005", group: "setup"},
+  {k: "tone", label: "Tone", unit: "Hz", type: "number", step: "1", group: "setup"},
+  {k: "dev", label: "Deviation", unit: "Hz, commanded", type: "number", step: "100", group: "setup"},
+  {sep: true, group: "setup"},
+  {k: "repeat", label: "Repeat", unit: "sweeps", type: "number", step: "1", group: "sweep"},
+  {k: "ballpark_att_db", label: "Ballpark attenuation", unit: "dB, PicoFox", type: "number", step: "0.25", group: "level"},
+  {k: "quick", label: "Quick sweep (shorter readings)", type: "checkbox", group: "sweep"},
+  {k: "monitor", label: "Play the audio on the speakers", type: "checkbox", group: "setup"},
+  {k: "cabled", label: "Cabled: no Morse ID", type: "checkbox", group: "setup"},
 ];
 
 function buildSetup() {
-  const form = $("setup");
+  const fallback = $("setup");
   for (const f of FIELDS) {
+    const form = $(`fields-${f.group}`) || fallback;
     if (f.sep) { form.insertAdjacentHTML("beforeend", '<hr class="sep">'); continue; }
     const id = `f_${f.k}`;
     const html = f.type === "checkbox"
@@ -297,7 +300,8 @@ function buildSetup() {
     const input = $(id);
     input.addEventListener("change", () => onFieldChange(f, input));
   }
-  form.addEventListener("submit", (e) => e.preventDefault());
+  for (const form of document.querySelectorAll("form"))
+    form.addEventListener("submit", (e) => e.preventDefault());
 }
 
 async function onFieldChange(f, input) {

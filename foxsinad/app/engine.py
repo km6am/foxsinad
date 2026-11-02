@@ -435,8 +435,10 @@ class Engine:
             pad_db=s["pad_db"], label="run", session=s["session"], radio=s["radio"],
             condition=s["condition"], note=s["note"], call=s["call"], cabled=s["cabled"],
             freq=s["freq"], tone=s["tone"], dev=s["dev"],
-            settle=0.5 if quick else 1.0, avg_coarse=0.75 if quick else 1.0,
-            avg_fine=1.5 if quick else 3.0, tail_db=3.0, device=self.audio_device,
+            settle=sweep.QUICK["settle"] if quick else sweep.SETTLE_S,
+            avg_coarse=sweep.QUICK["avg_coarse"] if quick else sweep.AVG_COARSE_S,
+            avg_fine=sweep.QUICK["avg_fine"] if quick else sweep.AVG_FINE_S,
+            tail_db=3.0, device=self.audio_device,
             port=None, cal=str(self.cal.path), monitor=False, live=False,
             runs_dir=self.runs_dir, af_input=af_input)
 

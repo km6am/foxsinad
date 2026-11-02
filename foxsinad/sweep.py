@@ -49,6 +49,13 @@ DEFAULT_CAL = ROOT / "cal" / "picofox_r3_attcal.json"
 RUNS = ROOT / "runs"
 TARGET_DB = 12.0
 
+# Seconds per reading: settle after each level change, then average.
+SETTLE_S = 1.0
+AVG_COARSE_S = 1.0
+AVG_FINE_S = 3.0
+QUICK = dict(settle=0.5, avg_coarse=0.75, avg_fine=1.5)
+FINE_MARGIN = 4            # ATT steps (1 dB) past the coarse bracket
+
 
 class SweepError(RuntimeError):
     """The sweep can't go on; the message says what to change."""
@@ -163,6 +170,12 @@ def twelve_db_point(levels, sinads, target=TARGET_DB):
     """Level (dBm) where SINAD crosses the target, or None."""
     fit = twelve_db_fit(levels, sinads, target)
     return None if fit is None else fit[0]
+
+
+def fine_steps(a, b):
+    """The fine pass: 0.25 dB steps across the coarse bracket (a strong
+    side, b weak side), with a little margin."""
+    return range(max(0, a - FINE_MARGIN), min(127, b + FINE_MARGIN) + 1)
 
 
 def _id_in_progress(events):
@@ -316,8 +329,7 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
                 stronger = [x for x in above if x < b]
                 a = max(stronger) if stronger else 0
 
-                # fine: 0.25 dB steps across the bracket, with a little margin
-                for att in range(max(0, a - 4), min(127, b + 4) + 1):
+                for att in fine_steps(a, b):
                     measure("fine", att, args.avg_fine)
         finally:
             fox.off()
@@ -467,11 +479,11 @@ def main():
     p.add_argument("--freq", type=float, default=145.55)
     p.add_argument("--tone", type=int, default=1000)
     p.add_argument("--dev", type=int, default=3000, help="commanded peak deviation, Hz")
-    p.add_argument("--settle", type=float, default=1.0, help="seconds after each level change")
+    p.add_argument("--settle", type=float, default=SETTLE_S, help="seconds after each level change")
     p.add_argument("--tail-db", type=float, default=3.0,
                    help="coarse pass continues until SINAD is below this twice (default 3)")
-    p.add_argument("--avg-coarse", type=float, default=1.0, help="seconds per coarse reading")
-    p.add_argument("--avg-fine", type=float, default=3.0, help="seconds per fine reading")
+    p.add_argument("--avg-coarse", type=float, default=AVG_COARSE_S, help="seconds per coarse reading")
+    p.add_argument("--avg-fine", type=float, default=AVG_FINE_S, help="seconds per fine reading")
     p.add_argument("--device", help="audio input (default: auto-detect the USB adapter)")
     p.add_argument("--port", help="PicoFox serial port (default: auto)")
     p.add_argument("--cal", default=str(DEFAULT_CAL))
@@ -490,7 +502,7 @@ def main():
                    help="run the sweep N times in a row (stops at the first error)")
     args = p.parse_args()
     if args.quick:
-        args.settle, args.avg_coarse, args.avg_fine = 0.5, 0.75, 1.5
+        args.settle, args.avg_coarse, args.avg_fine = (QUICK[k] for k in ("settle", "avg_coarse", "avg_fine"))
     try:
         for i in range(1, args.repeat + 1):
             if args.repeat > 1:
