@@ -38,7 +38,10 @@ STATUS_EVERY_S = 1.0
 METER_AVG_S = 0.25       # one analyzer window per meter reading: fast enough to adjust by
 METER_BOXCAR_S = 1.0     # the SINAD shown is the mean over this long
 AUDIO_SET_S = 2.0        # this long with the tone's peak on target sets the audio level
-AUDIO_SET_MIN_SINAD_DB = 20.0  # ... and the tone well above the noise (full quieting)
+# ... with the tone above the noise. 9 dB (12 dB SINAD less 3), so the volume
+# can be set at the sweep's level: there, noise adds to the tone's peak by
+# about a dB (estimated, not measured), well inside AUDIO_TOL_DB.
+AUDIO_SET_MIN_SINAD_DB = 9.0
 LOST_AFTER_POLLS = 3     # failed status polls in a row (while idle) before the PicoFox counts as gone
 ID_INTERVAL_S = 540
 
@@ -484,6 +487,7 @@ class Engine:
                 out = dict(label=res.label, csv=str(res.csv), png=str(png) if png.exists() else None,
                            point_dbm=_round(res.point_dbm, 2), sigma_db=_round(res.sigma_db, 3),
                            fit_points=res.fit_points, index=i, of=n,
+                           audio_peak_dbfs=args.audio_peak_dbfs,
                            radio=self.setup["radio"], condition=self.setup["condition"],
                            session=self.setup["session"], pad_db=args.pad_db,
                            level_ref=res.level_ref)
@@ -586,8 +590,20 @@ class Engine:
                     box.append(r.sinad_db)
                     r = dataclasses.replace(r, sinad_db=statistics.fmean(box),
                                             std_db=statistics.pstdev(box))
-                self._reading_event(r)
+                self._reading_event(r, **(self._meter_level(r) if fox is not None else {}))
         raise Stopped()
+
+    def _meter_level(self, r):
+        """With the PicoFox transmitting, a meter reading also says the level
+        (from the last status poll) and, as level_hint, what ballpark would
+        say about it - so one step sets the volume and the attenuation."""
+        out = dict(level_hint=hint(r, stop="go on"))
+        if self.last_status:
+            att = _att_steps(self.last_status)
+            lvl, ref = self._level(self.cal.dbm(att))
+            out.update(att=att, att_db=att * 0.25, out_dbm=round(self.cal.dbm(att), 2),
+                       level_dbm=lvl, level_ref=ref)
+        return out
 
     def _track_audio(self, r, on_target):
         """The radio's volume counts as set after AUDIO_SET_S of the tone's

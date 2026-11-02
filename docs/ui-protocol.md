@@ -60,8 +60,8 @@ Every event has `event` and `t` (Unix time, seconds).
 | `status` | `status` (or null) | PicoFox state, about once a second |
 | `run_started` | `label`, `index`, `of`, `pad_db`, `level_ref` | a sweep begins (`index` of `of` repeats) |
 | `point` | `phase` (`coarse`/`fine`), `att`, `gen_dbm`, `level_dbm`, `level_uv`, `sinad_db`, `sinad_sd`, `n`, `n_discarded`, `time`, `clipped` | one sweep reading |
-| `run_finished` | `label`, `csv`, `png` (null where matplotlib isn't installed, as on the phone), `point_dbm`, `sigma_db`, `fit_points`, `index`, `of`, `radio`, `condition`, `session`, `pad_db`, `level_ref` | a sweep's result (`point_dbm` null if no 12 dB crossing) |
-| `reading` | `sinad_db`, `std_db`, `peak_dbfs`, `clipped`, `under_range`, `audio_hint` (`OK`, `volume up`, `volume down`, `CLIPPING: volume down`, `NO AUDIO`, against `audio_target_dbfs`), `n_discarded`; ballpark adds `hint`, `att` (steps), `att_db`, `out_dbm`, `level_dbm`, `level_ref` | meter: every 0.25 s, SINAD the mean of the last 1 s; ballpark: every 1 s; record: every 0.25 s window, SINAD that window's, plus `boxcar_db` (mean of the last 1 s), `t_s`, `id_active` and the ballpark level fields |
+| `run_finished` | `label`, `csv`, `png` (null where matplotlib isn't installed, as on the phone), `point_dbm`, `sigma_db`, `fit_points`, `index`, `of`, `audio_peak_dbfs`, `radio`, `condition`, `session`, `pad_db`, `level_ref` | a sweep's result (`point_dbm` null if no 12 dB crossing) |
+| `reading` | `sinad_db`, `std_db`, `peak_dbfs`, `clipped`, `under_range`, `audio_hint` (`OK`, `volume up`, `volume down`, `CLIPPING: volume down`, `NO AUDIO`, against `audio_target_dbfs`), `n_discarded`; ballpark adds `hint`, `att` (steps), `att_db`, `out_dbm`, `level_dbm`, `level_ref` | meter: every 0.25 s, SINAD the mean of the last 1 s, and with the PicoFox connected also `level_hint` (ballpark's advice on the level) and the ballpark level fields; ballpark: every 1 s; record: every 0.25 s window, SINAD that window's, plus `boxcar_db` (mean of the last 1 s), `t_s`, `id_active` and the ballpark level fields |
 | `record_finished` | `label`, `csv`, `summary` (per attenuator setting: `att`, `level_dbm`, `n`, `seconds`, `median_db`, `p10_db`, `p90_db`, `below_pct`), `level_ref`, `radio`, `condition`, `session`, `pad_db`, `why` (where the starting level came from) | a record's result; Morse ID and clipped windows are left out of the summary |
 | `fox_event` | `text` (`*ID START`, `*ID DONE`) | a Morse ID started or ended |
 | `log` | `level` (`info`, `warn`, `error`), `msg` | anything worth showing |
@@ -69,7 +69,7 @@ Every event has `event` and `t` (Unix time, seconds).
 **`state`**: `mode` (`idle`, `sweep`, `ballpark`, `meter`, `record`), `connected`,
 `sim`, `hello` (the PicoFox's `*IDN?`), `port`, `setup`,
 `cabled_confirmed`, `runs_dir`, `audio_set` (null, or `peak_dbfs` and `t`:
-the tone's peak once meter has held it on target for 2 s at full quieting;
+the tone's peak once meter has held it on target for 2 s with SINAD at least 9 dB;
 cleared when `radio` changes; written into each run's header).
 
 **`status`**: the driver's fields as strings (`mode` OFF/CARRIER/TONE,

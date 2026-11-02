@@ -359,3 +359,17 @@ def test_record_flags_morse_id_windows_and_leaves_them_out():
     ids = int(text.split("# id_windows: ")[1].split()[0])
     assert ids > 0 and sum(g["n"] for g in fin["summary"]) <= windows - ids, (windows, ids)
     eng.shutdown()
+
+
+def test_meter_with_the_picofox_reports_the_level_and_a_level_hint():
+    eng, q = make()
+    eng.handle(dict(cmd="connect"))
+    eng.handle(dict(cmd="setup", call="N0CALL", pad_db=119.0))
+    assert eng.handle(dict(cmd="start", mode="meter", att_db=16))["ok"]
+    seen = drain(q, lambda e: e["event"] == "reading" and e.get("att") == 64)
+    r = seen[-1]
+    assert r["level_hint"] and r["level_ref"] == "antenna" and r["att_db"] == 16.0, r
+    assert abs(r["level_dbm"] - (eng.cal.dbm(64) - 119.0)) < 0.01
+    eng.handle(dict(cmd="stop"))
+    drain(q, lambda e: e["event"] == "state" and e["state"]["mode"] == "idle")
+    eng.shutdown()
