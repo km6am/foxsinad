@@ -27,7 +27,7 @@ import time
 import traceback
 from pathlib import Path
 
-from .. import sweep
+from .. import record, sweep
 from ..analyzer import AUDIO_TARGET_DBFS, AUDIO_TOL_DB, CLIP_LEVEL, NoAudio, audio_hint, peak_dbfs
 from ..ballpark import hint
 from ..picofox import PicoFox, PicoFoxError, find_port, set_cabled
@@ -45,13 +45,15 @@ ID_INTERVAL_S = 540
 SETUP_DEFAULTS = dict(
     radio="", condition="", session="", note="", pad_db=None, call="",
     freq=145.55, tone=1000, dev=3000, repeat=1, monitor=False,
-    ballpark_att_db=16.0, audio_target_dbfs=AUDIO_TARGET_DBFS, cabled=False)
+    ballpark_att_db=16.0, audio_target_dbfs=AUDIO_TARGET_DBFS, record_att_db=None,
+    cabled=False)
 
 NUMERIC = dict(pad_db=(0.0, 200.0), freq=(144.02, 147.98), tone=(100, 2400),
                dev=(100, 10000), repeat=(1, 100), ballpark_att_db=(0.0, 31.75),
-               audio_target_dbfs=(-30.0, -3.0))
+               audio_target_dbfs=(-30.0, -3.0), record_att_db=(0.0, 31.75))
 INTEGER = {"tone", "dev", "repeat"}
-QUARTER_DB = {"ballpark_att_db"}      # the attenuator's 0.25 dB steps
+QUARTER_DB = {"ballpark_att_db", "record_att_db"}      # the attenuator's 0.25 dB steps
+OPTIONAL = {"pad_db", "record_att_db"}   # may be empty (None): not entered / automatic
 
 
 class CommandError(ValueError):
@@ -110,6 +112,8 @@ class Engine:
         self.worker = None
         self.stop_evt = threading.Event()
         self.results = []             # this engine session's sweep results
+        self.records = []             # ... and its records
+        self._record_att = queue.Queue()   # record: attenuator changes, applied between windows
         self.audio_set = None         # the tone's peak once the radio's volume was set
         self._start_att = None        # meter: the attenuator setting it was started with
 
@@ -178,7 +182,7 @@ class Engine:
 
     def snapshot(self):
         return dict(event="snapshot", t=time.time(), state=self.state(),
-                    status=self.last_status, results=self.results,
+                    status=self.last_status, results=self.results, records=self.records,
                     cal=dict(freq_mhz=self.cal.freq_mhz, date=self.cal.date,
                              att=list(self.cal.att), dbm=list(self.cal.dbm_pts)))
 
@@ -258,7 +262,7 @@ class Engine:
                 raise CommandError(f"unknown setup field {k!r}", k)
             if k in NUMERIC:
                 if v in (None, ""):
-                    if k != "pad_db":
+                    if k not in OPTIONAL:
                         raise CommandError(f"{k} is required", k)
                     v = None
                 else:
@@ -307,13 +311,13 @@ class Engine:
     def cmd_start(self, mode, att_db=None):
         """att_db (meter only): set the attenuator first, e.g. 0 to set the
         radio's volume on a strong signal. Without it, meter leaves it as set."""
-        if mode not in ("sweep", "ballpark", "meter"):
+        if mode not in ("sweep", "ballpark", "meter", "record"):
             raise CommandError(f"unknown mode {mode!r}")
         if att_db is not None and mode != "meter":
             raise CommandError(f"att_db is for meter, not {mode}")
         self._start_att = None if att_db is None else round(_number(att_db, 0, 31.75, "att_db") * 4)
         self._require_idle(f"start {mode}")
-        if mode in ("sweep", "ballpark") and self.fox is None:
+        if mode in ("sweep", "ballpark", "record") and self.fox is None:
             raise CommandError("connect the PicoFox first")
         if self.fox is not None and not self.setup["call"] and not self.setup["cabled"]:
             raise CommandError("enter a callsign, or use cabled mode", "call")
@@ -339,9 +343,13 @@ class Engine:
             raise CommandError("connect the PicoFox first")
         if self.mode == "sweep":
             raise CommandError("manual controls are locked during a sweep; press Stop first")
-        if self.mode == "ballpark" and action != "att":
-            raise CommandError("only the attenuator can change during ballpark")
+        if self.mode in ("ballpark", "record") and action != "att":
+            raise CommandError(f"only the attenuator can change during {self.mode}")
         fox = self.fox
+        if action == "att" and self.mode == "record":
+            # the record loop sets it between windows, so each row's level is exact
+            self._record_att.put(round(_number(value, 0, 31.75, "attenuation (dB)") * 4))
+            return
         if action == "att":
             fox.set_att(round(_number(value, 0, 31.75, "attenuation (dB)") * 4))
         elif action == "freq":
@@ -426,7 +434,7 @@ class Engine:
     # -- modes (worker thread) ------------------------------------------------
     def _run_mode(self, mode):
         try:
-            if mode in ("sweep", "ballpark") and self._fox_mode() != "OFF":
+            if mode in ("sweep", "ballpark", "record") and self._fox_mode() != "OFF":
                 self.log("turning RF off first (cabled mode and the callsign are set "
                          "with RF off)")
                 self.fox.off()
@@ -480,6 +488,50 @@ class Engine:
                            level_ref=res.level_ref)
                 self.results.append(out)
                 self.emit("run_finished", **out)
+
+    def _record_level(self):
+        """The attenuator setting record starts at, and why: as set in the
+        setup, else nearest the last sweep's 12 dB point (as PicoFox output,
+        so a changed pad_db doesn't move it), else the ballpark setting."""
+        s = self.setup
+        if s["record_att_db"] is not None:
+            return round(s["record_att_db"] * 4), "as set"
+        last = next((r for r in reversed(self.results) if r["point_dbm"] is not None), None)
+        if last is not None:
+            out = last["point_dbm"] + (last["pad_db"] or 0.0)
+            att = min(range(128), key=lambda a: abs(self.cal.dbm(a) - out))
+            return att, f"nearest the last sweep's 12 dB point ({last['point_dbm']:.2f} dBm)"
+        return round(s["ballpark_att_db"] * 4), "the ballpark attenuation (no sweep yet)"
+
+    def _mode_record(self):
+        att, why = self._record_level()
+        self.log(f"record: starting at {att * 0.25:.2f} dB (ATT {att}), {why}")
+        while not self._record_att.empty():          # stale requests from an earlier run
+            self._record_att.get_nowait()
+        an, af_input = self._open_analyzer()
+        args = self._sweep_args(af_input)
+        box = collections.deque(maxlen=round(METER_BOXCAR_S / record.WINDOW_S))
+
+        def on_reading(row, r):
+            if math.isnan(r.sinad_db):
+                box.clear()
+            else:
+                box.append(r.sinad_db)
+            lvl, ref = self._level(row["gen_dbm"])
+            self._reading_event(r, t_s=row["t_s"], att=row["att"], att_db=row["att"] * 0.25,
+                                out_dbm=row["gen_dbm"], level_dbm=lvl, level_ref=ref,
+                                id_active=bool(row["id_active"]),
+                                boxcar_db=_round(statistics.fmean(box), 2) if box else None)
+
+        with an:
+            res = record.run(args, fox=self.fox, an=an, att=att, on_reading=on_reading,
+                             log=self.log, stop=self.stop_evt, requests=self._record_att)
+        out = dict(label=res.label, csv=str(res.csv), summary=res.summary,
+                   level_ref=res.level_ref, radio=self.setup["radio"],
+                   condition=self.setup["condition"], session=self.setup["session"],
+                   pad_db=args.pad_db, why=why)
+        self.records.append(out)
+        self.emit("record_finished", **out)
 
     def _mode_ballpark(self):
         s = self.setup

@@ -299,3 +299,63 @@ def test_the_audio_step_sets_full_level_and_records_the_volume():
     eng.handle(dict(cmd="setup", radio="ANOTHER"))
     assert eng.audio_set is None, "another radio's volume isn't set"
     eng.shutdown()
+
+
+def test_record_summary_leaves_out_ids_and_clipped_windows():
+    from foxsinad import record
+    nan = float("nan")
+    rows = ([dict(att=68, level_dbm=-125.0, sinad_db=s, id_active=0) for s in (10, 12, 14, 16)]
+            + [dict(att=68, level_dbm=-125.0, sinad_db=3.0, id_active=1),
+               dict(att=68, level_dbm=-125.0, sinad_db=nan, id_active=0),
+               dict(att=72, level_dbm=-126.0, sinad_db=8.0, id_active=0)])
+    a, b = record.summarize(rows)
+    assert (a["att"], a["n"], a["median_db"], a["below_pct"]) == (68, 4, 13.0, 25.0), a
+    assert (b["att"], b["n"], b["below_pct"]) == (72, 1, 100.0), b
+
+
+def test_record_follows_the_last_sweep_and_changes_level_between_windows():
+    import csv
+    eng, q = make()
+    eng.handle(dict(cmd="connect"))
+    eng.handle(dict(cmd="setup", call="N0CALL", radio="SIM", condition="bench", pad_db=119.0))
+    assert eng._record_level()[0] == 64                       # no sweep yet: ballpark 16 dB
+    eng.results.append(dict(point_dbm=-123.7, pad_db=119.0))  # as a sweep leaves it
+    att0, why = eng._record_level()
+    assert "12 dB point" in why and abs(eng.cal.dbm(att0) - 119.0 - (-123.7)) < 0.3, (att0, why)
+    assert eng.handle(dict(cmd="start", mode="record"))["ok"]
+    assert not eng.handle(dict(cmd="fox", action="tone", value=1000, dev=3000))["ok"]
+    seen = drain(q, lambda e: e["event"] == "reading" and e["att"] == att0)
+    assert eng.handle(dict(cmd="fox", action="att", value=(att0 + 8) / 4))["ok"]
+    seen = drain(q, lambda e: e["event"] == "reading" and e["att"] == att0 + 8)
+    assert seen[-1]["boxcar_db"] is not None and "t_s" in seen[-1]
+    eng.handle(dict(cmd="stop"))
+    seen = drain(q, lambda e: e["event"] == "record_finished")
+    fin = seen[-1]
+    assert [g["att"] for g in fin["summary"]] == [att0, att0 + 8], fin["summary"]
+    path = Path(fin["csv"])
+    assert path.name.startswith("record_SIM_bench") and not list(path.parent.glob("*.partial.csv"))
+    text = path.read_text()
+    assert "# summary_1: ATT" in text and "# mode: foxsinad record" in text
+    rows = list(csv.DictReader(l for l in text.splitlines() if not l.startswith("#")))
+    assert {int(r["att"]) for r in rows} == {att0, att0 + 8}
+    drain(q, lambda e: e["event"] == "state" and e["state"]["mode"] == "idle")
+    assert eng._fox_raw.mode == "OFF" and eng._fox_raw.att == 127
+    eng.shutdown()
+
+
+def test_record_flags_morse_id_windows_and_leaves_them_out():
+    eng = Engine(sim=True, sim_speed=SPEED, runs_dir=tempfile.mkdtemp(),
+                 sim_options=dict(pad_db=119.0, twelve_db_dbm=-123.7, seed=1, id_interval_s=20))
+    q = eng.subscribe()
+    eng.handle(dict(cmd="connect"))
+    eng.handle(dict(cmd="setup", call="N0CALL", radio="SIM"))
+    assert eng.handle(dict(cmd="start", mode="record"))["ok"]
+    drain(q, lambda e: e["event"] == "reading" and e.get("id_active"))
+    drain(q, lambda e: e["event"] == "reading" and not e.get("id_active"))
+    eng.handle(dict(cmd="stop"))
+    fin = drain(q, lambda e: e["event"] == "record_finished")[-1]
+    text = Path(fin["csv"]).read_text()
+    windows = int(text.split("# windows: ")[1].split()[0])
+    ids = int(text.split("# id_windows: ")[1].split()[0])
+    assert ids > 0 and sum(g["n"] for g in fin["summary"]) <= windows - ids, (windows, ids)
+    eng.shutdown()
