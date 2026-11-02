@@ -70,10 +70,10 @@ class Result:
 
 def level_reference(cabled, pad_db):
     """What a level means: (key, phrase, axis label). The level at the
-    radio is known only on a cabled path; over the air the path loss isn't
-    known, so a level is the PicoFox's output, after any external
-    attenuator."""
-    if cabled:
+    radio is known only on a cabled path whose external attenuation was
+    entered (pad_db None means it wasn't; 0 means none); otherwise a level is
+    the PicoFox's output, after any external attenuator."""
+    if cabled and pad_db is not None:
         return "radio", "at the radio", "level at the radio (dBm)"
     if pad_db:
         return "antenna", "into the transmit antenna", "level into the transmit antenna (dBm)"
@@ -234,8 +234,9 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
     rows = []
     cabled = getattr(args, "cabled", False)
     ref, ref_text, xlabel = level_reference(cabled, args.pad_db)
+    pad = args.pad_db or 0.0      # None: not entered, so levels are the PicoFox output
     dev = None
-    live = LivePlot(f"{label}  (pad {args.pad_db:g} dB)", xlabel) \
+    live = LivePlot(f"{label}  (pad {pad:g} dB)", xlabel) \
         if getattr(args, "live", False) else None
     with contextlib.ExitStack() as opened:
         if fox is None:
@@ -255,7 +256,7 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
             fox.set_att(0)
             fox.tone(args.tone, args.dev)
             r = read_clean(fox, an, 1.5, 1.0, log)
-            top = cal.dbm(0) - args.pad_db
+            top = cal.dbm(0) - pad
             if r.peak >= CLIP_LEVEL:
                 raise SweepError("the audio clips at full level. Turn the radio's volume down "
                                  "(audiocheck level) and run again.")
@@ -276,7 +277,7 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
                     fox.set_att(att)
                     r = read_clean(fox, an, args.settle, avg, log)
                     gen = cal.dbm(att)
-                    lvl = gen - args.pad_db
+                    lvl = gen - pad
                     row = [phase, round(gen, 2), round(lvl, 2), round(dbm_to_uv(lvl), 4),
                            round(r.sinad_db, 2), round(r.std_db, 3), r.n,
                            datetime.now().isoformat(timespec="milliseconds"),
@@ -308,7 +309,7 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
                 below = [r["att"] for r in coarse if r["sinad_db"] < TARGET_DB]
                 if not below:
                     raise SweepError(f"SINAD is still above {TARGET_DB:g} dB at ATT 127 "
-                             f"({cal.dbm(127) - args.pad_db:.1f} dBm {ref_text}). "
+                             f"({cal.dbm(127) - pad:.1f} dBm {ref_text}). "
                              "Add more fixed attenuation and run again. "
                              f"(Readings so far: {partial})")
                 b = min(below)
@@ -333,7 +334,7 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
     meta = dict(
         label=label, date=started.isoformat(timespec="seconds"), mode="foxsinad sweep",
         source="PicoFox r3 via USB", instrument="sound-card SINAD (foxsinad.analyzer)",
-        freq_mhz=args.freq, offset_db=-args.pad_db, dev_khz=args.dev / 1000,
+        freq_mhz=args.freq, offset_db=-pad, dev_khz=args.dev / 1000,
         tone_hz=args.tone, avg_s=args.avg_fine, avg_coarse_s=args.avg_coarse,
         settle_s=args.settle, radio=args.radio or "(none)",
         condition=args.condition or "(none)", note=args.note,
@@ -342,7 +343,8 @@ def run(args, fox=None, an=None, on_start=None, on_point=None, log=_say, stop=No
         level_ref={"radio": "level at the radio input (cabled: output - external attenuation)",
                    "antenna": "PicoFox output into the transmit antenna, after the external "
                               "attenuation; over the air, not the level at the radio",
-                   "output": "PicoFox output; over the air, not the level at the radio"}[ref],
+                   "output": "PicoFox output, not the level at the radio (over the air, or "
+                             "cabled with no external attenuation entered)"}[ref],
         session=args.session or "(none)",
         af_input=getattr(args, "af_input", None) or f"audio device {dev}", af_filter1="200Hz HPF (software)",
         af_filter2="3kHz LPF (software)", af_deemphasis="(radio's own)",

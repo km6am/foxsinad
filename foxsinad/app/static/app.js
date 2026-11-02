@@ -61,7 +61,8 @@ const REF = {
 function setupRef() {
   const s = S.state && S.state.setup;
   if (!s) return "output";
-  return s.cabled ? "radio" : (s.pad_db ? "antenna" : "output");
+  const known = s.pad_db !== null && s.pad_db !== undefined && s.pad_db !== "";
+  return s.cabled && known ? "radio" : (s.pad_db ? "antenna" : "output");
 }
 const attText = (db) => `${(+db).toFixed(2)} dB (ATT ${Math.round(db * 4)})`;
 
@@ -93,7 +94,10 @@ function calDbm(att) {
 
 async function send(cmd) {
   const reply = await transport.send(cmd);
-  if (!reply.ok) toast(reply.error);
+  if (!reply.ok) {
+    toast(reply.error);
+    if (reply.field) goToField(reply.field);   // the engine said which field stopped it
+  }
   return reply;
 }
 
@@ -242,13 +246,20 @@ function callsignEntered() {
 
 function needCallsign() {
   toast("Enter a callsign (or use cabled mode)");
-  const input = $("f_call");
+  goToField("call");
+}
+
+// Whenever a field blocks a run: scroll to it, focus it and outline it until
+// it's edited.
+function goToField(k) {
+  const input = $(`f_${k}`);
   if (!input) return;
   const field = input.closest(".field");
   field.classList.add("invalid", "attn");
   input.scrollIntoView({block: "center", behavior: "smooth"});
   input.focus({preventScroll: true});
-  input.addEventListener("input", () => field.classList.remove("invalid", "attn"), {once: true});
+  input.addEventListener(input.type === "checkbox" ? "change" : "input",
+                         () => field.classList.remove("invalid", "attn"), {once: true});
 }
 
 // ---- run setup -------------------------------------------------------------------

@@ -18,6 +18,7 @@ import argparse
 import collections
 import contextlib
 import dataclasses
+import json
 import math
 import queue
 import statistics
@@ -51,7 +52,12 @@ QUARTER_DB = {"ballpark_att_db"}      # the attenuator's 0.25 dB steps
 
 
 class CommandError(ValueError):
-    """A command the engine refuses; the message is shown to the user."""
+    """A command the engine refuses; the message is shown to the user. When
+    a setup field is the reason, field names it, so the page can go to it."""
+
+    def __init__(self, msg, field=None):
+        super().__init__(msg)
+        self.field = field
 
 
 class _Locked:
@@ -106,8 +112,39 @@ class Engine:
         self._subs_lock = threading.Lock()
         self._no_ui_since = time.monotonic()
         self._alive = True
+        self._restore_setup()
         self._poller = threading.Thread(target=self._poll_loop, daemon=True)
         self._poller.start()
+
+    # -- the Run setup, kept across restarts -----------------------------------
+    # All of it (callsign, frequency, radio, ...) but cabled mode, which is
+    # confirmed once per session: it means no Morse ID. A simulated bench
+    # keeps nothing, so it starts the same every time.
+    def _setup_path(self):
+        return None if self.sim else self.runs_dir / "setup.json"
+
+    def _restore_setup(self):
+        self._saved_setup = dict(self.setup)
+        path = self._setup_path()
+        if path is None or not path.exists():
+            return
+        try:
+            saved = json.loads(path.read_text())
+            saved.pop("cabled", None)
+            self.cmd_setup(**{k: v for k, v in saved.items() if k in SETUP_DEFAULTS})
+        except Exception as e:      # a bad file costs the saved setup, nothing more
+            self.log(f"saved setup not restored: {e}", "warn")
+
+    def _save_setup(self):
+        path = self._setup_path()
+        if path is None or self.setup == self._saved_setup:
+            return
+        self._saved_setup = dict(self.setup)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self.setup, indent=1))
+        except OSError as e:
+            self.log(f"setup not saved: {e}", "warn")
 
     # -- events -------------------------------------------------------------
     def subscribe(self):
@@ -147,6 +184,7 @@ class Engine:
                     runs_dir=str(self.runs_dir))
 
     def _state_changed(self):
+        self._save_setup()
         self.emit("state", state=self.state())
 
     # -- commands -----------------------------------------------------------
@@ -161,7 +199,8 @@ class Engine:
             return dict(ok=True, **(out or {}))
         except (CommandError, PicoFoxError, SweepError, LookupError) as e:
             self.log(e, "error")
-            return dict(ok=False, error=str(e))
+            field = getattr(e, "field", None)
+            return dict(ok=False, error=str(e), **({"field": field} if field else {}))
         except TypeError as e:
             return dict(ok=False, error=f"bad arguments for {name}: {e}")
         except Exception as e:            # never leave the UI without a reply
@@ -210,23 +249,23 @@ class Engine:
         new = dict(self.setup)
         for k, v in fields.items():
             if k not in SETUP_DEFAULTS:
-                raise CommandError(f"unknown setup field {k!r}")
+                raise CommandError(f"unknown setup field {k!r}", k)
             if k in NUMERIC:
                 if v in (None, ""):
                     if k != "pad_db":
-                        raise CommandError(f"{k} is required")
+                        raise CommandError(f"{k} is required", k)
                     v = None
                 else:
                     try:
                         v = float(v)
                     except (TypeError, ValueError):
-                        raise CommandError(f"{k}: {v!r} is not a number")
+                        raise CommandError(f"{k}: {v!r} is not a number", k)
                     lo, hi = NUMERIC[k]
                     if k in QUARTER_DB:
                         v = round(v * 4) / 4
                     if not (lo <= v <= hi) or (k in INTEGER and v != int(v)):
                         raise CommandError(f"{k} must be {'a whole number ' if k in INTEGER else ''}"
-                                           f"from {lo:g} to {hi:g}")
+                                           f"from {lo:g} to {hi:g}", k)
                     v = int(v) if k in INTEGER else v
             elif k in ("quick", "monitor", "cabled"):
                 v = bool(v)
@@ -236,7 +275,7 @@ class Engine:
         if "cabled" in fields and fields["cabled"] != self.setup["cabled"]:
             self._require_idle("change cabled mode")
             if self.fox is not None and self._fox_mode() != "OFF":
-                raise CommandError("turn RF off before changing cabled mode")
+                raise CommandError("turn RF off before changing cabled mode", "cabled")
         if new["cabled"] and not self.cabled_confirmed:
             raise CommandError("confirm cabled mode first (output into a load or test "
                                "equipment only, never an antenna)")
@@ -261,14 +300,13 @@ class Engine:
         if mode not in ("sweep", "ballpark", "meter"):
             raise CommandError(f"unknown mode {mode!r}")
         self._require_idle(f"start {mode}")
-        if mode in ("sweep", "ballpark"):
-            if self.fox is None:
-                raise CommandError("connect the PicoFox first")
-            if not self.setup["call"] and not self.setup["cabled"]:
-                raise CommandError("enter a callsign, or use cabled mode")
+        if mode in ("sweep", "ballpark") and self.fox is None:
+            raise CommandError("connect the PicoFox first")
+        if self.fox is not None and not self.setup["call"] and not self.setup["cabled"]:
+            raise CommandError("enter a callsign, or use cabled mode", "call")
         if mode == "sweep" and self.setup["cabled"] and self.setup["pad_db"] is None:
-            raise CommandError("enter the total external attenuation first: a cabled sweep "
-                               "reports the level at the radio. Ballpark helps find it.")
+            self.log("no external attenuation entered: levels are the PicoFox output, "
+                     "not the level at the radio (ballpark helps find it)", "warn")
         self.stop_evt.clear()
         self.mode = mode
         self.worker = threading.Thread(target=self._run_mode, args=(mode,), daemon=True)
@@ -329,7 +367,7 @@ class Engine:
         if self.setup["call"]:
             self.fox.set_call(self.setup["call"])
         elif not self.setup["cabled"]:
-            raise CommandError("enter a callsign, or use cabled mode")
+            raise CommandError("enter a callsign, or use cabled mode", "call")
 
     def _rf_off_quietly(self):
         try:
@@ -360,7 +398,7 @@ class Engine:
         """The level for a PicoFox output, and what it means (radio, antenna
         or output; see sweep.level_reference)."""
         pad = self.setup["pad_db"] or 0.0
-        ref = level_reference(self.setup["cabled"], pad)[0]
+        ref = level_reference(self.setup["cabled"], self.setup["pad_db"])[0]
         return round(out_dbm - pad, 2), ref
 
     def _reading_event(self, r, **extra):
@@ -394,7 +432,7 @@ class Engine:
         s = self.setup
         quick = s["quick"]
         return argparse.Namespace(
-            pad_db=s["pad_db"] or 0.0, label="run", session=s["session"], radio=s["radio"],
+            pad_db=s["pad_db"], label="run", session=s["session"], radio=s["radio"],
             condition=s["condition"], note=s["note"], call=s["call"], cabled=s["cabled"],
             freq=s["freq"], tone=s["tone"], dev=s["dev"],
             settle=0.5 if quick else 1.0, avg_coarse=0.75 if quick else 1.0,

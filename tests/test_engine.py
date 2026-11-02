@@ -125,8 +125,8 @@ def test_level_is_at_the_radio_only_when_cabled():
     assert st["level_ref"] == "output" and st["level_dbm"] == st["out_dbm"]
     r = eng.handle(dict(cmd="setup", cabled=True))
     assert r["ok"]
-    r = eng.handle(dict(cmd="start", mode="sweep"))
-    assert not r["ok"] and "external attenuation" in r["error"], r
+    eng._poll_once()                  # cabled, attenuation not entered: still the output
+    assert eng.last_status["level_ref"] == "output"
     eng.handle(dict(cmd="setup", ballpark_att_db=16.1))
     assert eng.setup["ballpark_att_db"] == 16.0, "rounded to the attenuator's 0.25 dB steps"
     eng.shutdown()
@@ -212,3 +212,38 @@ def test_the_picofox_follows_the_setup_frequency():
     assert abs(float(eng.last_status["freq"]) - 146.52) < 1e-6        # tuned at connect
     assert eng.handle(dict(cmd="setup", freq=145.55))["ok"]
     assert abs(float(eng.last_status["freq"]) - 145.55) < 1e-6        # and when it changes
+
+
+def test_a_refusal_names_the_field_that_caused_it():
+    eng, q = make()
+    r = eng.handle(dict(cmd="setup", tone=99999))
+    assert not r["ok"] and r["field"] == "tone", r
+    assert eng.handle(dict(cmd="connect"))["ok"]
+    assert eng.handle(dict(cmd="setup", call=""))["ok"]
+    r = eng.handle(dict(cmd="start", mode="meter"))
+    assert not r["ok"] and r["field"] == "call", r
+
+
+def test_a_cabled_sweep_without_attenuation_runs_and_reports_picofox_output():
+    eng, q = make()
+    eng.handle(dict(cmd="confirm_cabled"))
+    assert eng.handle(dict(cmd="setup", cabled=True, pad_db="", quick=True))["ok"]
+    assert eng.handle(dict(cmd="connect"))["ok"]
+    assert eng.handle(dict(cmd="start", mode="sweep"))["ok"]
+    seen = drain(q, lambda e: e["event"] == "run_started")
+    assert seen[-1]["level_ref"] == "output" and seen[-1]["pad_db"] is None
+    assert eng.handle(dict(cmd="stop"))["ok"]
+    drain(q, lambda e: e["event"] == "state" and e["state"]["mode"] == "idle")
+
+
+def test_the_setup_is_remembered_but_not_cabled_mode():
+    runs = tempfile.mkdtemp()
+    eng = Engine(runs_dir=runs)                       # a real bench, though nothing is opened
+    eng.handle(dict(cmd="confirm_cabled"))
+    assert eng.handle(dict(cmd="setup", call="KM6AM", freq=146.52, radio="TD-H3", cabled=True))["ok"]
+    eng.shutdown()
+    again = Engine(runs_dir=runs)
+    s = again.setup
+    assert (s["call"], s["freq"], s["radio"], s["cabled"]) == ("KM6AM", 146.52, "TD-H3", False), s
+    again.shutdown()
+    assert not (Path(make()[0].runs_dir) / "setup.json").exists()   # the simulator keeps nothing
