@@ -597,10 +597,6 @@ class Engine:
         self._alive = False
 
 
-def _round(x, digits):
-    return None if math.isnan(x) else round(x, digits)
-
-
 def _att_steps(status):
     """The attenuator setting in 0.25 dB steps; boards without the attenuator
     (the r2) report '-', which counts as the maximum."""
@@ -626,7 +622,8 @@ def _whole(v, lo, hi, what):
 
 
 def _round(v, n):
-    return None if v is None else round(v, n)
+    """For JSON, which has no NaN: a missing or non-finite value is null."""
+    return None if v is None or not math.isfinite(v) else round(v, n)
 
 
 def _jsonable(row):

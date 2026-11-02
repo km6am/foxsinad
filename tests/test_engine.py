@@ -247,3 +247,18 @@ def test_the_setup_is_remembered_but_not_cabled_mode():
     assert (s["call"], s["freq"], s["radio"], s["cabled"]) == ("KM6AM", 146.52, "TD-H3", False), s
     again.shutdown()
     assert not (Path(make()[0].runs_dir) / "setup.json").exists()   # the simulator keeps nothing
+
+
+def test_a_clipped_reading_is_valid_json():
+    # JSON has no NaN: a reading with no SINAD must go out as null, or the
+    # page can't parse it and shows nothing at all.
+    import json
+    from foxsinad.analyzer import Reading
+    eng, q = make()
+    eng._reading_event(Reading(float("nan"), float("nan"), 0, 8, 1.0, False))
+    while True:
+        e = q.get(timeout=1)
+        if e["event"] == "reading":
+            break
+    text = json.dumps(e, allow_nan=False)
+    assert e["sinad_db"] is None and e["clipped"] is True, text
