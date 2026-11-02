@@ -2,26 +2,34 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>foxsinad</title>
 <link rel="stylesheet" href="app.css">
 </head>
-<body>
-<header class="bar">
+<body class="tabbed">
+<!-- Always in view: what's running, whether RF is on, the audio level and
+     the live SINAD, so nothing that matters is ever on another tab. -->
+<header class="bar strip">
   <div class="brand">foxsinad <span id="simBadge" class="badge" hidden>simulated bench</span></div>
-  <div class="modes" role="radiogroup" aria-label="Mode">
-    <button type="button" class="seg" data-mode="sweep" role="radio">Sweep</button>
-    <button type="button" class="seg" data-mode="ballpark" role="radio">Ballpark</button>
-    <button type="button" class="seg" data-mode="meter" role="radio">Meter</button>
-  </div>
   <div class="actions">
     <button type="button" id="startBtn" class="primary">Start</button>
     <button type="button" id="stopBtn" class="danger">Stop</button>
   </div>
   <div id="runState" class="runstate">Idle</div>
+  <div id="stripSinad" class="stripsinad" aria-live="off"></div>
   <div id="rfState" class="rfstate" role="status">PicoFox not connected</div>
+  <div id="stripAudio" class="stripaudio"></div>
   <div id="link" class="link" title="Connection between this page and the engine">connecting…</div>
 </header>
+
+<nav id="tabbar" class="tabbar" role="tablist" aria-label="Steps">
+  <button type="button" class="tab" role="tab" data-tab="setup"><span>Setup</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab" role="tab" data-tab="audio"><span>Audio</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab" role="tab" data-tab="level"><span>Level</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab" role="tab" data-tab="sweep"><span>Sweep</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab" role="tab" data-tab="record"><span>Record</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab" role="tab" data-tab="tools" aria-label="Tools"><span>⋯</span><i class="tick" aria-hidden="true"></i></button>
+</nav>
 
 <div id="linkBanner" class="banner err" hidden>
   Lost the connection to the engine. If it's still running, it turns RF off after 10 s without a UI.
@@ -31,27 +39,76 @@
   test equipment, never an antenna.
 </div>
 
-<main class="grid">
-  <section class="pane setup" aria-labelledby="setupTitle">
-    <h2 id="setupTitle">Run</h2>
-    <form id="setup" autocomplete="off" novalidate></form>
-    <p class="hint" id="modeHelp"></p>
+<main class="tabs">
+  <section class="tabpanel" data-tab="setup" role="tabpanel">
+    <div class="pane">
+      <h2>Setup</h2>
+      <p class="hint">Once per session: the session (summit) name, your callsign and the
+        frequency; then the radio under test. Cabled: the PicoFox goes through attenuators
+        into the radio's antenna jack. Over the air: it radiates, through an attenuator,
+        while the radio is on its own antenna.</p>
+      <form id="fields-setup" class="fields" autocomplete="off" novalidate></form>
+    </div>
   </section>
 
-  <section class="pane plotpane" aria-labelledby="plotTitle">
-    <div class="plothead">
-      <h2 id="plotTitle">SINAD</h2>
-      <div id="legend" class="legend"></div>
+  <section class="tabpanel" data-tab="audio" role="tabpanel" hidden>
+    <div class="pane controls">
+      <h2>Audio</h2>
+      <p class="hint">Start transmits the tone at full level (strongest signal). Open the radio's
+        squelch and turn its volume until the audio bar sits in the target band; it's recorded
+        after 2 s on target and goes with each run.</p>
+      <form id="fields-audio" class="fields" autocomplete="off" novalidate></form>
+      <div id="audioSet" class="stepnote"></div>
     </div>
-    <div id="readout" class="readout"></div>
-    <div class="canvaswrap" id="canvasWrap">
-      <canvas id="plot" role="img" aria-label="SINAD plot"></canvas>
-      <div id="tip" class="tip" hidden></div>
-    </div>
-    <div id="results" class="results"></div>
+    <div class="plothost"></div>
   </section>
 
-  <section class="side">
+  <section class="tabpanel" data-tab="level" role="tabpanel" hidden>
+    <div class="pane controls">
+      <h2>Level</h2>
+      <p class="hint">Start transmits at the ballpark attenuation. Change the external
+        attenuator until SINAD reads about 12 dB (the green band), Stop, then enter the total
+        external attenuation (attenuators and cables). Cabled, that makes levels the level at
+        the radio; over the air, it's a note of the setup.</p>
+      <form id="fields-level" class="fields" autocomplete="off" novalidate></form>
+    </div>
+    <div class="plothost"></div>
+  </section>
+
+  <section class="tabpanel" data-tab="sweep" role="tabpanel" hidden>
+    <div class="pane controls">
+      <h2>Sweep</h2>
+      <p class="hint">Steps the PicoFox down through its range and finds the 12 dB SINAD point.
+        Repeat runs it several times; their spread is the honest error bar.</p>
+      <form id="fields-sweep" class="fields" autocomplete="off" novalidate></form>
+      <div class="buttons"><button type="button" id="nextRadioBtn" title="Keeps the session; clears the radio, its audio level and its attenuation">Next radio</button></div>
+    </div>
+    <div class="plothost"></div>
+    <div class="pane wide"><h2>Sweeps this session</h2><div id="results" class="results"><span class="muted">none yet</span></div></div>
+  </section>
+
+  <section class="tabpanel" data-tab="record" role="tabpanel" hidden>
+    <div class="pane controls">
+      <h2>Record</h2>
+      <p class="hint">Holds one level and records SINAD every 0.25 s until Stop: desense that
+        comes and goes shows as dips. Leave the level empty to start at the last sweep's
+        12 dB point.</p>
+      <form id="fields-record" class="fields" autocomplete="off" novalidate></form>
+      <div id="recordStart" class="stepnote"></div>
+      <div class="stepper" role="group" aria-label="Change the level while recording">
+        <span class="lbl">Level</span>
+        <button type="button" data-step="-4">−1 dB</button>
+        <button type="button" data-step="-1">−0.25</button>
+        <button type="button" data-step="1">+0.25</button>
+        <button type="button" data-step="4">+1 dB</button>
+      </div>
+      <p class="hint">"+" adds attenuation (a weaker signal).</p>
+    </div>
+    <div class="plothost"></div>
+    <div class="pane wide"><h2>Records this session</h2><div id="records" class="results"><span class="muted">none yet</span></div></div>
+  </section>
+
+  <section class="tabpanel" data-tab="tools" role="tabpanel" hidden>
     <div class="pane" aria-labelledby="foxTitle">
       <div class="panehead">
         <h2 id="foxTitle">PicoFox</h2>
@@ -74,7 +131,7 @@
         <button type="button" id="carrierBtn">Carrier</button>
         <button type="button" id="offBtn">Off</button>
         <button type="button" id="idBtn">Send ID</button>
-        <button type="button" id="freqBtn" title="Retune to the frequency in the Run pane">Apply frequency</button>
+        <button type="button" id="freqBtn" title="Retune to the frequency in Setup">Apply frequency</button>
       </div>
       <p class="hint" id="manualHint"></p>
     </div>
@@ -85,6 +142,19 @@
     </div>
   </section>
 </main>
+
+<!-- The readout and plot: one copy, moved into whichever step's tab is open. -->
+<section class="pane plotpane" id="plotPane" aria-labelledby="plotTitle">
+  <div class="plothead">
+    <h2 id="plotTitle">SINAD</h2>
+    <div id="legend" class="legend"></div>
+  </div>
+  <div id="readout" class="readout"></div>
+  <div class="canvaswrap" id="canvasWrap">
+    <canvas id="plot" role="img" aria-label="SINAD plot"></canvas>
+    <div id="tip" class="tip" hidden></div>
+  </div>
+</section>
 
 <dialog id="cabledDialog">
   <form method="dialog">

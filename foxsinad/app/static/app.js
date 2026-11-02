@@ -40,15 +40,26 @@ const S = {
   status: null,         // PicoFox status
   cal: null,            // {att: [...], dbm: [...]}
   results: [],          // finished sweeps this engine session
+  records: [],          // finished records this engine session
   run: null,            // current sweep: {label, index, of, points: [], mark}
   prevRuns: [],         // earlier sweeps' points, drawn faint
-  readings: [],         // [{t, sinad, ...}] for meter and ballpark
+  readings: [],         // [{t, sinad, ...}] for meter, ballpark and record
   log: [],
   foxEvents: [],
   selectedMode: loadPref("mode", "sweep"),
+  tab: loadPref("tab", "setup"),
   linkOk: false,
 };
 const TIME_WINDOW_S = 120;
+const RECORD_WINDOW_S = 300;     // record shows more history
+const windowFor = (mode) => (mode === "record" ? RECORD_WINDOW_S : TIME_WINDOW_S);
+
+// The workflow tabs (foxsinad's page; a page without #tabbar, such as
+// rfbench's, keeps the Sweep/Ballpark/Meter buttons). Each step's tab picks
+// the mode Start runs; Setup and the tools tab run none.
+const TABBED = !!document.getElementById("tabbar");
+const TAB_MODE = {setup: null, audio: "meter", level: "ballpark", sweep: "sweep", record: "record", tools: null};
+const MODE_TAB = {meter: "audio", ballpark: "level", sweep: "sweep", record: "record"};
 const TARGET_DB = 12;
 
 // What a level means. Only a cabled path gives the level at the radio;
@@ -77,7 +88,8 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(+v)) ? "–" : (+v).toFixed(d).replace("-", "−");
 const running = () => S.state && S.state.mode !== "idle";
-const plotMode = () => (running() ? S.state.mode : S.selectedMode);
+const tabMode = () => (TABBED ? TAB_MODE[S.tab] : S.selectedMode);
+const plotMode = () => (running() ? S.state.mode : tabMode() || S.selectedMode);
 
 function calDbm(att) {
   const c = S.cal;
@@ -122,11 +134,12 @@ transport.events((ev) => {
   switch (ev.event) {
     case "snapshot":
       S.state = ev.state; S.status = ev.status; S.cal = ev.cal; S.results = ev.results || [];
+      S.records = ev.records || [];
       renderAll();
       break;
     case "state":
       S.state = ev.state;
-      renderHeader(); renderSetup(); renderStatus(); renderManual(); draw();
+      renderHeader(); renderSetup(); renderStatus(); renderManual(); renderSteps(); draw();
       break;
     case "status":
       S.status = ev.status;
@@ -148,13 +161,18 @@ transport.events((ev) => {
     case "run_finished":
       S.results.push(ev);
       if (S.run) S.run.mark = ev.point_dbm;
-      renderResults(); renderReadout(); draw();
+      renderResults(); renderReadout(); renderSteps(); draw();
+      break;
+    case "record_finished":
+      S.records.push(ev);
+      renderRecords(); renderSteps();
       break;
     case "reading":
       S.readings.push({t: ev.t, sinad: ev.sinad_db, hint: ev.hint, level: ev.level_dbm,
                        ref: ev.level_ref, attDb: ev.att_db, clipped: ev.clipped,
-                       under: ev.under_range, peak: ev.peak_dbfs, audioHint: ev.audio_hint, mode: plotMode()});
-      S.readings = S.readings.filter((r) => ev.t - r.t <= TIME_WINDOW_S + 5);
+                       under: ev.under_range, peak: ev.peak_dbfs, audioHint: ev.audio_hint,
+                       box: ev.boxcar_db, id: ev.id_active, mode: plotMode()});
+      S.readings = S.readings.filter((r) => ev.t - r.t <= windowFor(plotMode()) + 5);
       renderReadout(); draw();
       break;
     case "fox_event":
@@ -180,11 +198,14 @@ document.querySelectorAll(".seg").forEach((b) => b.addEventListener("click", () 
   renderHeader(); renderReadout(); draw();
 }));
 // Every mode needs the PicoFox, so until it's connected this button connects it.
+// The Audio step sets the volume on the strongest signal, so it starts at ATT 0.
 $("startBtn").addEventListener("click", () => {
   if (!S.state.connected) return send({cmd: "connect"});
+  const mode = tabMode();
+  if (!mode) return;
   if (!S.state.setup.cabled && !callsignEntered()) return needCallsign();
-  if (S.selectedMode !== "sweep") S.readings = [];
-  send({cmd: "start", mode: S.selectedMode});
+  if (mode !== "sweep") S.readings = [];
+  send(TABBED && S.tab === "audio" ? {cmd: "start", mode, att_db: 0} : {cmd: "start", mode});
 });
 $("stopBtn").addEventListener("click", () => send({cmd: "stop"}));
 
@@ -197,7 +218,9 @@ const MODE_HELP = {
           + "then Stop. Cabled: enter the total external attenuation.",
   meter: "Shows the radio's SINAD live. With the PicoFox connected it transmits the tone "
        + "at the setup's frequency and the attenuator as set; Stop turns RF off.",
+  record: "Holds one level and records SINAD every 0.25 s until Stop.",
 };
+const MODE_NAME = {meter: "Audio", ballpark: "Level", sweep: "Sweep", record: "Record"};
 
 function renderHeader() {
   const st = S.state;
@@ -207,15 +230,17 @@ function renderHeader() {
     b.disabled = running() && b.dataset.mode !== mode;
   });
   $("simBadge").hidden = !(st && st.sim);
-  $("startBtn").disabled = !st || running();
-  $("startBtn").textContent = st && !st.connected ? "Connect" : "Start";
+  const connected = st && st.connected;
+  $("startBtn").disabled = !st || running() || (connected && !tabMode());
+  $("startBtn").textContent = st && !connected ? "Connect" : "Start";
+  $("startBtn").title = connected && !tabMode() ? "Open Audio, Level, Sweep or Record to start one" : "";
   const rfOn = S.status && S.status.mode && S.status.mode !== "OFF";
   $("stopBtn").disabled = !st || !(running() || rfOn);
-  $("runState").textContent = !st ? "" : running()
-    ? `${st.mode[0].toUpperCase()}${st.mode.slice(1)} running` : "Idle";
+  const name = (m) => (TABBED ? MODE_NAME[m] : `${m[0].toUpperCase()}${m.slice(1)}`);
+  $("runState").textContent = !st ? "" : running() ? `${name(st.mode)} running` : "Idle";
   renderRf(rfOn);
   $("cabledBanner").hidden = !(st && st.setup.cabled);
-  $("modeHelp").textContent = MODE_HELP[mode];
+  if ($("modeHelp")) $("modeHelp").textContent = MODE_HELP[mode];
   const ref = S.run && running() ? S.run.ref : setupRef();
   $("plotTitle").textContent = mode === "sweep"
     ? `SINAD vs ${REF[ref].axis.replace(" (dBm)", "")}` : "SINAD over time";
@@ -249,11 +274,13 @@ function needCallsign() {
   goToField("call");
 }
 
-// Whenever a field blocks a run: scroll to it, focus it and outline it until
-// it's edited.
+// Whenever a field blocks a run: open its tab, scroll to it, focus it and
+// outline it until it's edited.
 function goToField(k) {
   const input = $(`f_${k}`);
   if (!input) return;
+  const panel = input.closest(".tabpanel");
+  if (panel) selectTab(panel.dataset.tab);
   const field = input.closest(".field");
   field.classList.add("invalid", "attn");
   input.scrollIntoView({block: "center", behavior: "smooth"});
@@ -262,28 +289,143 @@ function goToField(k) {
                          () => field.classList.remove("invalid", "attn"), {once: true});
 }
 
+// ---- workflow tabs ------------------------------------------------------------
+document.querySelectorAll(".tab").forEach((b) =>
+  b.addEventListener("click", () => selectTab(b.dataset.tab)));
+
+function selectTab(t) {
+  if (!TABBED || !(t in TAB_MODE)) return;
+  S.tab = t;
+  savePref("tab", t);
+  if (TAB_MODE[t] && !running()) S.selectedMode = TAB_MODE[t];
+  document.querySelectorAll(".tabpanel").forEach((p) => { p.hidden = p.dataset.tab !== t; });
+  // the one readout and plot go into the open step's tab
+  const host = document.querySelector(`.tabpanel[data-tab="${t}"] .plothost`);
+  const pane = $("plotPane");
+  if (host && pane.parentElement !== host) host.appendChild(pane);
+  pane.hidden = !host;
+  window.scrollTo(0, 0);
+  renderSteps(); renderHeader(); renderReadout(); draw();
+}
+
+// Each step's checkmark, from the engine's state: guidance only, nothing is
+// refused because an earlier step isn't checked.
+function stepDone(t) {
+  const st = S.state;
+  if (!st) return false;
+  const s = st.setup;
+  const mine = (r) => (r.radio || "") === (s.radio || "");
+  switch (t) {
+    case "setup": return !!(st.connected && (s.call || s.cabled) && s.freq);
+    case "audio": return !!st.audio_set;
+    case "level": return s.pad_db !== null && s.pad_db !== undefined;
+    case "sweep": return S.results.some((r) => mine(r) && r.point_dbm !== null);
+    case "record": return S.records.some(mine);
+    default: return false;
+  }
+}
+
+function renderSteps() {
+  if (!TABBED) return;
+  const runTab = running() ? MODE_TAB[S.state.mode] : null;
+  document.querySelectorAll(".tab").forEach((b) => {
+    const t = b.dataset.tab;
+    b.setAttribute("aria-selected", String(t === S.tab));
+    b.classList.toggle("done", stepDone(t));
+    b.classList.toggle("running", t === runTab);
+  });
+  renderStepNotes();
+}
+
+function renderStepNotes() {
+  const st = S.state;
+  if (!st) return;
+  const a = st.audio_set;
+  $("audioSet").innerHTML = a
+    ? `<span class="tag good">Audio set: ${fmt(a.peak_dbfs, 1)} dBFS peak</span>`
+    : `<span class="muted">Not set yet for this radio.</span>`;
+  const r = recordStart();
+  $("recordStart").innerHTML = r
+    ? `Starts at <strong>${attText(r.att / 4)}</strong>${r.out === null ? "" : `, ${fmt(r.out - (st.setup.pad_db || 0), 1)} dBm ${REF[setupRef()].text}`} <span class="muted">(${esc(r.why)})</span>`
+    : "";
+}
+
+// Where record starts, as the engine decides it (_record_level).
+function recordStart() {
+  const st = S.state;
+  if (!st) return null;
+  const s = st.setup;
+  let att, why;
+  if (s.record_att_db !== null && s.record_att_db !== undefined) {
+    att = Math.round(s.record_att_db * 4); why = "as set";
+  } else {
+    const last = [...S.results].reverse().find((r) => r.point_dbm !== null && r.point_dbm !== undefined);
+    if (last && S.cal) {
+      const out = last.point_dbm + (last.pad_db || 0);
+      att = 0;
+      for (let a = 1; a < 128; a++) if (Math.abs(calDbm(a) - out) < Math.abs(calDbm(att) - out)) att = a;
+      why = "nearest the last sweep's 12 dB point";
+    } else {
+      att = Math.round(s.ballpark_att_db * 4); why = "the ballpark attenuation; no sweep yet";
+    }
+  }
+  return {att, why, out: calDbm(att)};
+}
+
+if (TABBED) {
+  $("nextRadioBtn").addEventListener("click", async () => {
+    if (running()) return toast("Stop first");
+    const r = await send({cmd: "setup", radio: "", pad_db: ""});
+    if (!r.ok) return;
+    S.readings = [];
+    selectTab("setup");
+    goToField("radio");
+  });
+  document.querySelectorAll(".stepper button").forEach((b) => b.addEventListener("click", () => {
+    const att = S.status && +S.status.att;
+    if (att === undefined || Number.isNaN(att)) return;
+    const next = Math.max(0, Math.min(127, att + +b.dataset.step));
+    send({cmd: "fox", action: "att", value: next / 4});
+  }));
+}
+
+function renderRecords() {
+  const el = $("records");
+  if (!el) return;
+  if (!S.records.length) { el.innerHTML = `<span class="muted">none yet</span>`; return; }
+  const rows = S.records.flatMap((r) => r.summary.map((g, i) => `<tr title="${esc(r.csv)}">
+      <td>${i ? "" : esc(r.label)}</td><td class="num">${attText(g.att / 4)}</td>
+      <td class="num">${fmt(g.level_dbm, 1)}</td><td class="num">${fmt(g.seconds, 0)}</td>
+      <td class="num">${fmt(g.median_db, 1)}</td><td class="num">${fmt(g.p10_db, 1)}–${fmt(g.p90_db, 1)}</td>
+      <td class="num">${fmt(g.below_pct, 0)}%</td></tr>`)).join("");
+  el.innerHTML = `<table><thead><tr><th>Record</th><th class="num">Attenuator</th><th class="num">Level (dBm)</th>
+    <th class="num">Seconds</th><th class="num">Median SINAD</th><th class="num">10–90%</th>
+    <th class="num">Below 12 dB</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 // ---- run setup -------------------------------------------------------------------
 // group: the workflow tab a field belongs on (a page without tabs puts them
 // all in #setup, in this order).
 const FIELDS = [
-  {k: "radio", label: "Radio", type: "text", group: "setup"},
-  {k: "condition", label: "Condition", type: "text", hint: "bench, antenna, summit …", group: "setup"},
   {k: "session", label: "Session", type: "text", hint: "runs are grouped in a folder of this name", group: "setup"},
-  {k: "note", label: "Note", type: "text", group: "setup"},
-  {sep: true, group: "setup"},
-  {k: "pad_db", label: "External attenuation", unit: "dB", type: "number", step: "0.1", group: "level",
-   hint: "between the PicoFox and the radio (cabled) or its antenna. Needed for cabled sweeps: only then is the level at the radio known."},
   {k: "call", label: "Callsign", type: "text", group: "setup"},
   {k: "freq", label: "Frequency", unit: "MHz", type: "number", step: "0.005", group: "setup"},
+  {k: "cabled", label: "Cabled: no Morse ID", type: "checkbox", group: "setup"},
+  {sep: true, group: "setup"},
+  {k: "radio", label: "Radio", type: "text", group: "setup"},
+  {k: "condition", label: "Condition", type: "text", hint: "bench, antenna, summit …", group: "setup"},
+  {k: "note", label: "Note", type: "text", group: "setup"},
+  {sep: true, group: "setup"},
   {k: "tone", label: "Tone", unit: "Hz", type: "number", step: "1", group: "setup"},
   {k: "dev", label: "Deviation", unit: "Hz, commanded", type: "number", step: "100", group: "setup"},
-  {sep: true, group: "setup"},
-  {k: "repeat", label: "Repeat", unit: "sweeps", type: "number", step: "1", group: "sweep"},
-  {k: "ballpark_att_db", label: "Ballpark attenuation", unit: "dB, PicoFox", type: "number", step: "0.25", group: "level"},
+  {k: "monitor", label: "Play the audio on the speakers", type: "checkbox", group: "setup"},
   {k: "audio_target_dbfs", label: "Audio target", unit: "dBFS peak", type: "number", step: "1", group: "audio",
    hint: "where the tone's peak should sit; set the radio's volume to it on a strong signal"},
-  {k: "monitor", label: "Play the audio on the speakers", type: "checkbox", group: "setup"},
-  {k: "cabled", label: "Cabled: no Morse ID", type: "checkbox", group: "setup"},
+  {k: "ballpark_att_db", label: "Ballpark attenuation", unit: "dB, PicoFox", type: "number", step: "0.25", group: "level"},
+  {k: "pad_db", label: "External attenuation", unit: "dB", type: "number", step: "0.1", group: "level",
+   hint: "between the PicoFox and the radio (cabled) or its antenna. Needed for cabled sweeps: only then is the level at the radio known."},
+  {k: "repeat", label: "Repeat", unit: "sweeps", type: "number", step: "1", group: "sweep"},
+  {k: "record_att_db", label: "Record level", unit: "dB, PicoFox; empty: automatic", type: "number", step: "0.25", group: "record"},
 ];
 
 function buildSetup() {
@@ -431,14 +573,14 @@ function renderManual() {
   const connected = st && st.connected;
   const mode = st ? st.mode : "idle";
   const all = ["toneBtn", "carrierBtn", "offBtn", "idBtn", "freqBtn"];
-  for (const id of all) $(id).disabled = !connected || mode === "sweep" || mode === "ballpark";
+  for (const id of all) $(id).disabled = !connected || ["sweep", "ballpark", "record"].includes(mode);
   slider.disabled = !connected || mode === "sweep";
   if (f && !sliderBusy && !Number.isNaN(+f.att)) slider.value = f.att / 4;
   renderAttLabel(+slider.value);
   $("manualHint").textContent = !connected ? "Connect the PicoFox to use these."
     : mode === "sweep" ? "Locked while a sweep runs."
-    : mode === "ballpark" ? "Only the attenuator can change during ballpark."
-    : "Tone and Carrier use the callsign, frequency, tone and deviation from the Run pane.";
+    : mode === "ballpark" || mode === "record" ? `Only the attenuator can change during ${mode}.`
+    : `Tone and Carrier use the callsign, frequency, tone and deviation from ${TABBED ? "Setup" : "the Run pane"}.`;
 }
 
 // ---- log ------------------------------------------------------------------------
@@ -454,11 +596,12 @@ function renderLog() {
 const HINT_CLASS = (h) => !h ? "" : h.startsWith("GOOD") ? "good" : h.startsWith("NO") || h.startsWith("CLIP") ? "err" : "warn";
 
 function renderReadout() {
+  renderStrip();
   const el = $("readout");
   const mode = plotMode();
   if (mode === "sweep") {
     const r = S.run;
-    if (!r) { el.innerHTML = `<span class="sub">No sweep yet in this session.</span>`; return; }
+    if (!r) { el.innerHTML = `<span class="sub">No sweep yet in this session.</span><span class="sub"></span>`; return; }
     const last = r.points[r.points.length - 1];
     let html = `<span class="sub">${esc(r.label)} · run ${r.index} of ${r.of}</span>`;
     if (r.mark !== null && r.mark !== undefined) {
@@ -473,15 +616,35 @@ function renderReadout() {
   // Every indicator is always drawn ("–" until there's a reading), so the
   // page doesn't move when a run starts.
   const last = S.readings[S.readings.length - 1] || {};
-  let html = `<span class="big">${fmt(last.sinad, 1)}<span class="unit">dB SINAD</span></span>`;
-  if (last.hint) html += `<span class="tag ${HINT_CLASS(last.hint)}">${esc(last.hint)}</span>`;
+  const shown = last.box ?? last.sinad;        // record: the 1 s average, not one window
+  let html = `<span class="big">${fmt(shown, 1)}<span class="unit">dB SINAD</span></span>`;
+  if (last.id) html += `<span class="tag warn">MORSE ID</span>`;
+  else if (last.hint) html += `<span class="tag ${HINT_CLASS(last.hint)}">${esc(last.hint)}</span>`;
   else if (last.under) html += `<span class="tag err">NO AUDIO</span>`;
   else if (last.clipped) html += `<span class="tag err">CLIPPING</span>`;
+  else if (mode === "meter" && last.audioHint)
+    html += `<span class="tag ${last.audioHint === "OK" ? "good" : "warn"}">${esc(last.audioHint === "OK" ? "AUDIO ON TARGET" : last.audioHint.toUpperCase())}</span>`;
   else html += `<span class="tag" aria-hidden="true"></span>`;
   html += last.level !== null && last.level !== undefined
     ? `<span class="sub">${fmt(last.level, 1)} dBm ${REF[last.ref || "output"].text} · ${attText(last.attDb)}</span>`
-    : `<span class="sub">${S.readings.length ? "" : "Press Start to listen."}</span>`;
-  el.innerHTML = html + audioLevel(last);
+    : `<span class="sub">${S.readings.length ? "" : startPrompt()}</span>`;
+  // the audio bar lives in the strip when there is one
+  el.innerHTML = html + ($("stripAudio") ? "" : audioLevel(last));
+}
+
+function startPrompt() {
+  return S.state && !S.state.connected ? "Press Connect, then Start." : "Press Start to listen.";
+}
+
+// The strip: live SINAD and the audio bar, whatever tab is open.
+function renderStrip() {
+  if (!$("stripAudio")) return;
+  const last = S.readings[S.readings.length - 1] || {};
+  const pts = S.run ? S.run.points : [];
+  const v = running() && S.state.mode === "sweep" ? (pts.length ? pts[pts.length - 1].sinad : null)
+    : running() ? (last.box ?? last.sinad) : null;
+  $("stripSinad").innerHTML = `${fmt(v, 1)}<span class="unit">dB SINAD</span>`;
+  $("stripAudio").innerHTML = audioLevel(running() && S.state.mode !== "sweep" ? last : {});
 }
 
 // The sound card's peak level, for setting the radio's volume: a bar from
@@ -505,7 +668,7 @@ function audioLevel(r) {
 function renderResults() {
   const el = $("results");
   const rs = S.results;
-  if (!rs.length) { el.innerHTML = ""; return; }
+  if (!rs.length) { el.innerHTML = TABBED ? `<span class="muted">none yet</span>` : ""; return; }
   const rows = rs.map((r, i) => `<tr title="${esc(r.csv)}">
       <td>${i + 1}</td><td>${esc(r.label)}</td>
       <td class="num">${r.point_dbm === null ? "none" : fmt(r.point_dbm, 2)}</td>
@@ -548,6 +711,7 @@ function niceTicks(lo, hi, target = 6) {
 
 function draw() {
   const wrap = $("canvasWrap");
+  if (!wrap.clientWidth) return;           // the plot isn't on the open tab
   const dpr = window.devicePixelRatio || 1;
   const W = wrap.clientWidth, H = wrap.clientHeight;
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
@@ -637,9 +801,11 @@ function drawSweep(W, H) {
 
 function drawTime(W, H, mode) {
   const now = S.readings.length ? S.readings[S.readings.length - 1].t : Date.now() / 1000;
-  const pts = S.readings.filter((r) => now - r.t <= TIME_WINDOW_S);
+  const span = windowFor(mode);
+  const pts = S.readings.filter((r) => now - r.t <= span && r.sinad !== null && r.sinad !== undefined);
   const y1 = Math.max(30, Math.ceil(Math.max(0, ...pts.map((p) => p.sinad)) / 5) * 5 + 2);
-  const {X, Y, f} = axes(W, H, -TIME_WINDOW_S, 0, 0, y1, "seconds ago", (v) => String(-v));
+  const {X, Y, f} = axes(W, H, -span, 0, 0, y1, "seconds ago", (v) => String(-v));
+  if (mode === "record" && pts.length) return drawRecord(pts, now, X, Y, f);
   if (mode === "ballpark") {
     ctx.fillStyle = css("--band");
     ctx.fillRect(f.l, Y(16), f.r - f.l, Y(9) - Y(16));
@@ -657,8 +823,32 @@ function drawTime(W, H, mode) {
     for (const p of pts) hitPoints.push({x: X(p.t - now), y: Y(p.sinad),
       text: `${fmt(p.sinad, 1)} dB SINAD<br>${new Date(p.t * 1000).toLocaleTimeString()}${p.hint ? " · " + esc(p.hint) : ""}`});
   } else {
-    emptyNote(f, running() ? "Listening …" : "Press Start to listen.");
+    emptyNote(f, running() ? "Listening …" : startPrompt());
   }
+}
+
+// Record: every 0.25 s window as a faint dot (Morse ID windows hollow), the
+// 1 s average as the line.
+function drawRecord(pts, now, X, Y, f) {
+  ctx.save(); ctx.beginPath(); ctx.rect(f.l, f.t, f.r - f.l, f.b - f.t); ctx.clip();
+  const prev = css("--prev"), accent = css("--accent");
+  for (const p of pts) {
+    ctx.beginPath(); ctx.arc(X(p.t - now), Y(p.sinad), 2, 0, 2 * Math.PI);
+    if (p.id) { ctx.strokeStyle = css("--warn"); ctx.lineWidth = 1; ctx.stroke(); }
+    else { ctx.fillStyle = prev; ctx.fill(); }
+  }
+  ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.lineJoin = "round";
+  ctx.beginPath();
+  let down = false;
+  for (const p of pts) {
+    if (p.box === null || p.box === undefined) { down = false; continue; }
+    if (down) ctx.lineTo(X(p.t - now), Y(p.box)); else ctx.moveTo(X(p.t - now), Y(p.box));
+    down = true;
+  }
+  ctx.stroke();
+  ctx.restore();
+  for (const p of pts) hitPoints.push({x: X(p.t - now), y: Y(p.box ?? p.sinad),
+    text: `${fmt(p.sinad, 1)} dB (window) · ${fmt(p.box, 1)} dB (1 s)<br>${new Date(p.t * 1000).toLocaleTimeString()} · ${attText(p.attDb)}${p.id ? " · Morse ID" : ""}`});
 }
 
 function emptyNote(f, text) {
@@ -669,6 +859,12 @@ function emptyNote(f, text) {
 
 function renderLegend(mode) {
   const el = $("legend");
+  if (mode === "record") {
+    el.innerHTML = `<span><i style="background:var(--prev)"></i>each 0.25 s</span>
+      <span><i class="line" style="background:var(--accent)"></i>1 s average</span>
+      <span><i class="hollow" style="border-color:var(--warn)"></i>Morse ID</span>`;
+    return;
+  }
   if (mode !== "sweep") {
     const what = mode === "meter" ? "1 s average, every 0.25 s" : "1 s readings";
     el.innerHTML = `<span><i class="line" style="background:var(--accent)"></i>SINAD, ${what}</span>`;
@@ -704,7 +900,13 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 // ---- start ------------------------------------------------------------------------
 function renderAll() {
   renderHeader(); renderSetup(); renderStatus(); renderManual();
-  renderResults(); renderReadout(); renderLog(); draw();
+  renderResults(); renderRecords(); renderReadout(); renderLog(); renderSteps(); draw();
 }
 buildSetup();
+if (TABBED) {
+  // the tab bar sticks just under the strip, whose height changes with its contents
+  const strip = document.querySelector(".strip");
+  new ResizeObserver(() => document.documentElement.style.setProperty("--strip-h", `${strip.offsetHeight}px`)).observe(strip);
+  selectTab(S.tab in TAB_MODE ? S.tab : "setup");
+}
 renderAll();

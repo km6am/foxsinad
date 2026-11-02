@@ -206,3 +206,59 @@ dialog h2 { text-transform: none; font-size: 17px; color: var(--ink); letter-spa
   background: var(--err-bg); color: var(--err); border: 1px solid var(--err); border-radius: 8px;
   padding: 8px 14px; font-size: 13px; z-index: 20;
 }
+
+/* ---- workflow tabs (foxsinad's page; rfbench's page has none of these) ---- */
+.strip { row-gap: 8px; }
+.stripsinad { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; min-width: 6.5em; }
+.stripsinad .unit { font-size: 12px; color: var(--ink2); margin-left: 3px; font-weight: 500; }
+.stripaudio { flex: 1 1 360px; min-width: 0; }
+.stripaudio .audiolevel { flex-basis: auto; }
+.tabbar {
+  display: flex; gap: 2px; padding: 0 16px; background: var(--surface);
+  border-bottom: 1px solid var(--border); position: sticky; top: var(--strip-h, 0); z-index: 4;
+}
+.tab {
+  position: relative; border: 0; border-radius: 0; background: none; padding: 10px 14px 8px;
+  color: var(--ink2); font-weight: 600; border-bottom: 3px solid transparent;
+}
+.tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.tab .tick { display: inline-block; width: 1.1em; margin-left: 4px; font-style: normal; color: var(--good); }
+.tab.done .tick::before { content: "✓"; }
+.tab.running .tick::before { content: "●"; color: var(--err); }
+.tabs { max-width: 1180px; margin: 0 auto; padding: 12px 16px 24px; }
+.tabpanel { display: grid; gap: 12px; grid-template-columns: 300px minmax(0, 1fr); align-items: start; }
+.tabpanel[hidden] { display: none; }
+.tabpanel[data-tab="setup"], .tabpanel[data-tab="tools"] { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.tabpanel .wide { grid-column: 1 / -1; }
+.plothost { min-width: 0; }
+.plothost:empty { display: none; }
+.fields { display: grid; gap: 9px; margin: 10px 0; }
+.tabpanel[data-tab="setup"] .fields { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.tabpanel[data-tab="setup"] .sep { grid-column: 1 / -1; }
+.stepnote { font-size: 13px; margin: 8px 0; min-height: 1.6em; }
+.stepnote .tag { font-weight: 650; padding: 3px 10px; border-radius: 6px; }
+.stepper { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.stepper .lbl { font-size: 12px; color: var(--ink2); margin-right: 4px; }
+.controls .buttons { margin-top: 10px; }
+
+@media (max-width: 720px) {
+  /* phone: the steps go to a bar along the bottom, within thumb reach */
+  body.tabbed { padding-bottom: calc(58px + env(safe-area-inset-bottom)); }
+  .strip { padding: 8px 12px; gap: 8px; }
+  .strip .brand, .strip .link { display: none; }
+  .strip .runstate { min-width: 0; flex: 1; }
+  .stripsinad { font-size: 18px; min-width: 5.5em; text-align: right; }
+  .stripaudio { flex-basis: 100%; }
+  .stripaudio .lvlhint { min-width: 7.5em; }
+  .tabbar {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto; padding: 0 0 env(safe-area-inset-bottom);
+    border-top: 1px solid var(--border); border-bottom: 0; justify-content: space-around;
+  }
+  .tab { flex: 1; padding: 8px 2px 10px; font-size: 13px; border-bottom: 0; border-top: 3px solid transparent; }
+  .tab[aria-selected="true"] { border-top-color: var(--accent); }
+  .tab .tick { display: block; margin: 0 auto; height: 1.1em; font-size: 11px; }
+  .tabs { padding: 10px 12px 16px; }
+  .tabpanel, .tabpanel[data-tab="setup"], .tabpanel[data-tab="tools"] { grid-template-columns: minmax(0, 1fr); }
+  .tabpanel .plothost { order: -1; }   /* the readout and plot first, then the controls */
+  .toast { bottom: calc(70px + env(safe-area-inset-bottom)); }
+}
