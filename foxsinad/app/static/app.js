@@ -455,7 +455,8 @@ const WIZ = {
       focusField("radio");
     } else if (S.tab === "radio") {
       for (const k of ["radio", "condition", "note"]) if (!(await flushField(k))) return;
-      if (!S.state.setup.radio) { toast("Name the radio"); return goToField("radio"); }
+      // the box as typed: the state that echoes the setup can arrive after its reply
+      if (!($("f_radio").value.trim() || S.state.setup.radio)) { toast("Name the radio"); return goToField("radio"); }
       if (!(await stopAndWait())) return;
       S.readings = [];
       selectTab("levels");
