@@ -246,7 +246,7 @@ class SinadAnalyzer:
         needed = max(1, round(avg_s / (self.window / self.fs)))
         # Past avg_s it keeps going for a clean window, but not forever: audio
         # that clips throughout returns a reading with no SINAD and its peak.
-        give_up = max(2 * needed, 8)
+        give_up = 2 * needed       # the meter's 0.25 s reading: 0.5 s, so a clipped level still updates
         while len(kept) + discarded < needed or (not kept and discarded < give_up):
             block, overflowed = self._get()
             bad = bad or overflowed
