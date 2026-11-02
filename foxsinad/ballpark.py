@@ -115,7 +115,7 @@ def main():
         print(f"\n12 dB SINAD is near {out - pad:.1f} dBm {where} "
               "(a rough figure; the sweep measures it properly).")
     print("\nNext:")
-    print(f"  ~/miniconda3/envs/sota-rf/bin/python -m foxsinad.sweep --pad-db {pad:g} "
+    print(f"  python3 -m foxsinad.sweep --pad-db {pad:g} "
           f"--radio <radio> --condition <condition>" + (" --cabled" if args.cabled else ""))
     print("  (add --session <name> to group runs in a folder, --monitor to listen)")
 

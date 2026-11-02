@@ -1,7 +1,7 @@
 # foxsinad: working notes for Claude
 
 `README.md` says what foxsinad is and how to run it; `docs/ui-protocol.md`
-is the UI ↔ engine contract; `docs/plans/` holds the design notes.
+is the UI ↔ engine contract; `docs/plans/` holds the design notes (local only, not in the repo).
 
 ## rfbench (`~/rfbench`) uses this repo as a library
 
