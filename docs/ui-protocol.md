@@ -12,10 +12,16 @@ UI runs unchanged in a WebView.
 | Desktop (`python -m foxsinad.app`) | `POST /cmd`, body = one command, reply = JSON | `GET /events`, server-sent events, one JSON event per `data:` line |
 | Android (foxysinad) | `window.FoxsinadBridge.send(json)` returns the reply JSON | the app calls `window.foxsinadEvent(json)` |
 
-The Android bridge may also offer `share(folder)`: it hands the folder's
-CSV and PNG files to Android's share sheet and returns `""`, or an error
-message for a toast. The page shows its Share button only when the bridge
-has `share`.
+The Android bridge may also offer, for a folder inside its runs folder:
+
+- `share(folder)`: hands the folder's finished CSV and PNG files to
+  Android's share sheet; returns `""`, or an error message for a toast.
+- `save(folder)`: copies them to `Download/FoxySINAD/<folder>/`, replacing
+  the copies that install made before; returns a message for a toast
+  either way.
+
+The page shows Share and Save to Downloads only when the bridge has them;
+on the desktop the files are already on disk.
 
 The desktop server listens on 127.0.0.1 only, checks the `Host` header,
 and only accepts `application/json` POSTs from its own origin.
@@ -35,6 +41,8 @@ Commands that change the PicoFox reply once the change has been made.
 | `confirm_cabled` | `confirmed`: bool | the operator's confirmation that the output goes only into a load or test equipment; lasts for this engine session. `false` also leaves cabled mode (idle only). |
 | `start` | `mode`: `sweep`, `ballpark`, `meter`, `record`; `att_db` (meter only) | starts a mode. Idle only. Sweep, ballpark and record need a connected PicoFox; with one connected, every mode needs a callsign or cabled mode (`field: "call"`). A cabled sweep without `pad_db` runs, with levels as the PicoFox output. Meter with `att_db` sets the attenuator first (0: a strong signal for setting the radio's volume); without it, the attenuator stays as set. |
 | `stop` | | ends the running mode; RF off. When idle, turns RF off if it's on. |
+| `sessions` | | replies `sessions`: every folder in the runs folder holding foxsinad sweeps or records, newest first, each `{session, folder, path, sweeps, records, first, last, radios, current}`. `session` is the name as typed (else the folder's name); `first`/`last` are run start times; `current` marks the setup's session. Folders starting with `.` or `_`, and folders of other tools' runs, aren't listed. |
+| `delete_session` | `folder` (a `sessions` folder name) | deletes the CSVs and plots foxsinad made in that folder, then the folder if nothing else is left; replies `deleted` (files), `kept` (names of the files left) and `sessions`. Idle only. Deleting the current session clears `session`. Can't be undone: the page asks first. |
 | `fox` | `action`, `value`, `dev` | manual control: `att` (value in dB, 0–31.75, rounded to 0.25), `freq` (MHz), `tone` (value = tone Hz, dev = Hz), `carrier`, `off`, `id`. Refused during a sweep; only `att` during ballpark and record (record applies it between windows, so each row's level is exact). |
 
 **Setup fields** (`state.setup`): `radio`, `condition`, `session`, `note`

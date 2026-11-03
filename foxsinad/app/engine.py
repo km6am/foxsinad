@@ -321,6 +321,60 @@ class Engine:
         if new_session:
             self._emit_session_sweeps()
 
+    def cmd_sessions(self):
+        """Every session folder holding foxsinad runs, newest first, for the
+        Sessions tab. Other folders in runs/ (other tools' runs) aren't listed."""
+        out = []
+        current = sweep.slug(self.setup["session"])
+        for folder in sorted(self.runs_dir.iterdir()) if self.runs_dir.is_dir() else []:
+            if not folder.is_dir() or folder.name.startswith((".", "_")):
+                continue
+            runs = [m for _, m in _finished_runs(folder)
+                    if m.get("mode") in ("foxsinad sweep", "foxsinad record")]
+            if not runs:
+                continue
+            dates = sorted(m["date"] for m in runs if m.get("date"))
+            named = [m.get("session") for m in runs if _named(m.get("session"))]
+            # the name as typed, if it still leads here; else the folder's own
+            name = named[-1] if named and sweep.slug(named[-1]) == folder.name else folder.name
+            out.append(dict(
+                session=name, folder=folder.name, path=str(folder),
+                sweeps=sum(m["mode"] == "foxsinad sweep" for m in runs),
+                records=sum(m["mode"] == "foxsinad record" for m in runs),
+                first=dates[0] if dates else None, last=dates[-1] if dates else None,
+                radios=sorted({_named(m.get("radio")) for m in runs} - {""}),
+                current=folder.name == current))
+        return dict(sessions=sorted(out, key=lambda s: s["last"] or "", reverse=True))
+
+    def cmd_delete_session(self, folder):
+        """Deletes a session's runs: the CSVs and plots foxsinad made, then the
+        folder if nothing else is left in it. Can't be undone; the page asks
+        first. The session being deleted stops being the current one."""
+        self._require_idle("delete a session")
+        path = self.runs_dir / str(folder)
+        # a plain name of a folder directly in runs/: never "..", nor a link out
+        if (not folder or str(folder) != sweep.slug(folder) or str(folder).startswith((".", "_"))
+                or not path.is_dir() or path.resolve().parent != self.runs_dir.resolve()):
+            raise CommandError(f"no session folder {folder!r}")
+        gone = 0
+        for csv in sorted(path.glob("*.csv")):
+            ours = csv.name.endswith(".partial.csv") or (
+                sweep.read_header(csv).get("mode", "").startswith("foxsinad "))
+            if not ours:
+                continue
+            for f in (csv, csv.with_suffix(".png")):
+                if f.exists():
+                    f.unlink()
+                    gone += 1
+        left = sorted(f.name for f in path.iterdir())
+        if not left:
+            path.rmdir()
+        self.log(f"deleted session {folder}: {gone} files"
+                 + (f"; kept {len(left)} that foxsinad didn't make" if left else ""))
+        if sweep.slug(self.setup["session"]) == path.name:
+            self.cmd_setup(session="")
+        return dict(deleted=gone, kept=left, **self.cmd_sessions())
+
     def cmd_confirm_cabled(self, confirmed=True):
         """The UI's confirmation that the output goes only into a load or
         test equipment. Lasts for this engine session."""

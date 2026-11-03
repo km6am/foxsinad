@@ -16,6 +16,8 @@ First public version.
 **App**
 - Web UI as a summit workflow: session, radio, levels, sweep, finish. The
   Finish table reads every sweep saved in the session's folder.
+- A Sessions tab listing every saved session: continue one, share or save its
+  files (in the Android app), or delete it after a confirmation.
 - A simulated bench (`--sim`) for trying it, and for the tests, without hardware.
 - The engine and page are shared with the Android app (km6am/foxysinad) and
   the rfbench test harness.

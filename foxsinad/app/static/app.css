@@ -243,12 +243,22 @@ dialog h2 { text-transform: none; font-size: 17px; color: var(--ink); letter-spa
 .tabpanel[data-tab="sweep"] { grid-template-columns: minmax(0, 1fr); }
 .tabpanel[data-tab="session"] .fields, .tabpanel[data-tab="radio"] .fields { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 .tabpanel[data-tab="session"] .sep { grid-column: 1 / -1; }
-.tab.more { margin-left: auto; }
+.tab.sessions { margin-left: auto; }   /* past the steps: not one of them */
+.tabpanel[data-tab="sessions"] { grid-template-columns: minmax(0, 1fr); }
+.sesslist { display: grid; gap: 10px; margin-top: 10px; }
+.sess { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; font-size: 13px; }
+.sess.current { border-color: var(--accent); }
+.sesshead { font-size: 15px; }
+.sesshead .tag { font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 6px; margin-left: 6px; }
+.sess .buttons { margin-top: 2px; }
+.sess [data-sess="delete"] { margin-left: auto; }
+.filebtns { margin: 4px 0 10px; }
 /* Back / Next: under the step on a desktop, along the bottom on a phone */
 .wiznav {
   position: sticky; bottom: 0; z-index: 4; display: flex; gap: 8px; align-items: center; justify-content: flex-end;
   max-width: 1180px; margin: 0 auto; padding: 10px 16px; background: var(--surface); border-top: 1px solid var(--border);
 }
+.wiznav[hidden] { display: none; }   /* off the steps (Sessions, ⋯): no Back / Next */
 .wiznav button { padding: 9px 16px; }
 .wiznav button[data-act="back"] { margin-right: auto; }
 .wiznav .navnote { color: var(--ink2); font-size: 13px; margin-left: auto; }
@@ -267,6 +277,7 @@ dialog h2 { text-transform: none; font-size: 17px; color: var(--ink); letter-spa
   .tab { flex: 1; padding: 8px 2px 6px; font-size: 12.5px; }
   .tab .tick { display: block; margin: 0 auto; height: 1.1em; font-size: 11px; }
   .tab.more { flex: 0 0 2.6em; margin-left: 0; }
+  .tab.sessions { margin-left: 0; }
   .tabs { padding: 10px 12px 16px; }
   .tabpanel, .tabpanel[data-tab="tools"] { grid-template-columns: minmax(0, 1fr); }
   .tabpanel .plothost { order: -1; }   /* the readout and plot first, then the controls */

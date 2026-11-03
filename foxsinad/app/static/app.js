@@ -63,7 +63,7 @@ const windowFor = (mode) => (mode === "record" ? RECORD_WINDOW_S : TIME_WINDOW_S
 const TABBED = !!document.getElementById("tabbar");
 const STEPS = ["session", "radio", "levels", "sweep", "finish"];
 const TAB_MODE = {session: null, radio: null, levels: "meter", sweep: "sweep", finish: null,
-                  record: "record", tools: null};
+                  sessions: null, record: "record", tools: null};
 const MODE_TAB = {meter: "levels", ballpark: "levels", sweep: "sweep", record: "record"};
 const TARGET_DB = 12;
 
@@ -143,6 +143,7 @@ transport.events((ev) => {
       S.sessionSweeps = {session: ev.state.setup.session, sweeps: ev.session_sweeps || []};
       renderAll();
       if (TABBED) autoConnect();
+      if (S.tab === "sessions") loadSessions();
       break;
     case "session_sweeps":
       S.sessionSweeps = {session: ev.session, sweeps: ev.sweeps};
@@ -173,10 +174,12 @@ transport.events((ev) => {
       S.results.push(ev);
       if (S.run) S.run.mark = ev.point_dbm;
       renderResults(); renderReadout(); renderSteps(); draw();
+      if (S.tab === "sessions") loadSessions();
       break;
     case "record_finished":
       S.records.push(ev);
       renderRecords(); renderSteps();
+      if (S.tab === "sessions") loadSessions();
       break;
     case "reading":
       S.readings.push({t: ev.t, sinad: ev.sinad_db, hint: ev.hint, level: ev.level_dbm,
@@ -322,6 +325,7 @@ function selectTab(t) {
   window.scrollTo(0, 0);
   renderSteps(); renderHeader(); renderReadout(); draw();
   autoConnect();
+  if (t === "sessions") loadSessions();
 }
 
 // The Radio step's Next turns RF on, so the step connects the PicoFox as
@@ -360,6 +364,7 @@ function renderSteps() {
   renderStepNotes();
   renderWizNav();
   renderSummary();
+  renderSessions();
 }
 
 function renderStepNotes() {
@@ -569,26 +574,115 @@ function renderSummary() {
   if (!rs.length) { el.innerHTML = `<span class="muted">No sweeps in this session yet.</span>`; return; }
   const refs = [...new Set(rs.map((r) => r.level_ref || "radio"))];
   const days = new Set(rs.map((r) => (r.date || "").slice(0, 10)));
-  el.innerHTML = `<table><thead><tr><th>Time</th><th>Radio</th><th class="num">12 dB SINAD (dBm)</th>
+  const dir = rs[0].csv.replace(/\/[^/]*$/, "");
+  // on the phone the files are only reachable through these buttons; on
+  // the desktop they're on disk, so the folder is named instead
+  const onDisk = !canShare() && !canSave();
+  el.innerHTML = `${folderButtons(dir)}
+    <table><thead><tr><th>Time</th><th>Radio</th><th class="num">12 dB SINAD (dBm)</th>
     <th class="num">±</th><th class="num">Atten. (dB)</th><th class="num">Volume (dBFS)</th></tr></thead><tbody>
-    ${rs.map((r) => `<tr title="${esc(r.csv)}"><td class="muted">${shortTime(r.date, days.size > 1)}</td><td>${esc(r.radio || "–")}${r.condition ? ` <span class="muted">${esc(r.condition)}</span>` : ""}${refs.length > 1 ? ` <span class="muted">${REF[r.level_ref || "radio"].text}</span>` : ""}</td>
+    ${rs.map((r) => `<tr${onDisk ? ` title="${esc(r.csv)}"` : ""}><td class="muted">${shortTime(r.date, days.size > 1)}</td><td>${esc(r.radio || "–")}${r.condition ? ` <span class="muted">${esc(r.condition)}</span>` : ""}${refs.length > 1 ? ` <span class="muted">${REF[r.level_ref || "radio"].text}</span>` : ""}</td>
       <td class="num">${r.point_dbm === null ? "none" : fmt(r.point_dbm, 2)}</td>
       <td class="num">${r.sigma_db === null ? "–" : fmt(r.sigma_db, 2)}</td>
       <td class="num">${fmt(r.pad_db, 1)}</td><td class="num">${fmt(r.audio_peak_dbfs, 1)}</td></tr>`).join("")}</tbody></table>
     <p class="hint">${refs.length === 1 ? `Levels are ${REF[refs[0]].text}. ` : ""}± is each fit's own uncertainty; repeat sweeps show the real spread.</p>
-    <p class="hint">${sess ? `Session “${esc(sess)}”. ` : ""}The CSVs are in ${esc(rs[0].csv.replace(/\/[^/]*$/, ""))}.</p>
-    ${canShare() ? `<div class="buttons"><button type="button" id="shareBtn">Share this session's files</button></div>` : ""}`;
-  const share = $("shareBtn");
-  if (share) share.addEventListener("click", () => {
-    const err = window.FoxsinadBridge.share(rs[0].csv.replace(/\/[^/]*$/, ""));
-    if (err) toast(err);
-  });
+    <p class="hint">${sess ? `Session “${esc(sess)}”. ` : ""}${onDisk ? `The CSVs are in ${esc(dir)}.` : ""}</p>`;
 }
+
+// Share and Save to Downloads for one folder's files, where the app offers
+// them (the phone); nothing on the desktop, where the files are on disk.
+function folderButtons(dir, {before = "", after = "", primary = true} = {}) {
+  const b = [before];
+  if (canShare()) b.push(`<button type="button"${primary ? ` class="primary"` : ""} data-files="share" data-dir="${esc(dir)}">Share files</button>`);
+  if (canSave()) b.push(`<button type="button" data-files="save" data-dir="${esc(dir)}">Save to Downloads</button>`);
+  b.push(after);
+  const html = b.join("");
+  return html ? `<div class="buttons filebtns">${html}</div>` : "";
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-files]");
+  if (!btn) return;
+  const bridge = window.FoxsinadBridge;
+  if (btn.dataset.files === "share") {
+    const err = bridge.share(btn.dataset.dir);
+    if (err) toast(err);
+  } else {
+    toast(bridge.save(btn.dataset.dir));
+  }
+});
 
 // The phone app can hand a folder's files to Android's share sheet; on the
 // desktop they're already on disk, so there's no button.
 function canShare() {
   return !!(window.FoxsinadBridge && typeof window.FoxsinadBridge.share === "function");
+}
+function canSave() {
+  return !!(window.FoxsinadBridge && typeof window.FoxsinadBridge.save === "function");
+}
+
+// ---- Sessions: every session folder, to continue, share, save or delete --------
+S.sessions = null;
+async function loadSessions() {
+  const r = await send({cmd: "sessions"});
+  if (r.ok) { S.sessions = r.sessions; renderSessions(); }
+}
+
+function sessionDates(s) {
+  if (!s.first) return "";
+  const a = shortTime(s.first, true), b = shortTime(s.last, true);
+  if (a === b) return a;
+  return s.first.slice(0, 10) === s.last.slice(0, 10) ? `${a}–${shortTime(s.last, false)}` : `${a} – ${b}`;
+}
+
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+function renderSessions() {
+  const el = $("sessionList");
+  if (!el || !S.sessions) return;
+  if (!S.sessions.length) { el.innerHTML = `<span class="muted">No saved sessions yet.</span>`; return; }
+  const busy = running();
+  el.innerHTML = S.sessions.map((s, i) => {
+    const what = [plural(s.sweeps, "sweep"), s.records ? plural(s.records, "record") : ""].filter(Boolean).join(", ");
+    const cont = `<button type="button" data-sess="continue" data-i="${i}"${busy ? " disabled" : ""}>${s.current ? "Add a radio" : "Continue"}</button>`;
+    const del = `<button type="button" class="danger" data-sess="delete" data-i="${i}"${busy ? " disabled" : ""}>Delete</button>`;
+    return `<div class="sess${s.current ? " current" : ""}">
+      <div class="sesshead"><strong>${esc(s.session)}</strong>${s.current ? ` <span class="tag good">current</span>` : ""}</div>
+      <div class="muted">${esc(sessionDates(s))} · ${what}${s.radios.length ? ` · ${esc(s.radios.join(", "))}` : ""}</div>
+      ${folderButtons(s.path, {before: cont, after: del, primary: false})}
+    </div>`;
+  }).join("");
+}
+
+if ($("sessionList")) $("sessionList").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-sess]");
+  const s = btn && S.sessions[+btn.dataset.i];
+  if (!s) return;
+  if (btn.dataset.sess === "continue") {
+    // the session's sweeps fill Finish from its folder; the next radio is named afresh
+    if (!(await send({cmd: "setup", session: s.session, radio: "", note: ""})).ok) return;
+    S.run = null; S.prevRuns = []; S.readings = [];
+    selectTab("radio");
+    focusField("radio");
+  } else if (await confirmDelete(s)) {
+    const r = await send({cmd: "delete_session", folder: s.folder});
+    if (!r.ok) return;
+    toast(`Deleted “${s.session}”${r.kept.length ? `; kept ${plural(r.kept.length, "file")} foxsinad didn't make` : ""}.`);
+    S.sessions = r.sessions;
+    renderSessions();
+  }
+});
+
+function confirmDelete(s) {
+  const d = $("deleteDialog");
+  $("deleteTitle").textContent = `Delete “${s.session}”?`;
+  $("deleteWhat").textContent = `${[plural(s.sweeps, "sweep"), s.records ? plural(s.records, "record") : ""].filter(Boolean).join(" and ")}`
+    + `${s.first ? `, ${sessionDates(s)}` : ""}, and their plots.`;
+  return new Promise((resolve) => {
+    d.addEventListener("close", () => resolve(d.returnValue === "ok"), {once: true});
+    d.returnValue = "";
+    d.showModal();
+  });
 }
 
 if (TABBED) {

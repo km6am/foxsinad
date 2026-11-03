@@ -28,6 +28,7 @@
   <button type="button" class="tab" role="tab" data-tab="levels"><span>Levels</span><i class="tick" aria-hidden="true"></i></button>
   <button type="button" class="tab" role="tab" data-tab="sweep"><span>Sweep</span><i class="tick" aria-hidden="true"></i></button>
   <button type="button" class="tab" role="tab" data-tab="finish"><span>Finish</span><i class="tick" aria-hidden="true"></i></button>
+  <button type="button" class="tab sessions" role="tab" data-tab="sessions"><span>Sessions</span><i class="tick" aria-hidden="true"></i></button>
   <button type="button" class="tab more" role="tab" data-tab="tools" aria-label="More: record, PicoFox, log"><span>⋯</span><i class="tick" aria-hidden="true"></i></button>
 </nav>
 
@@ -80,6 +81,15 @@
     <div class="pane wide">
       <h2>Session summary</h2>
       <div id="summary" class="results"></div>
+    </div>
+  </section>
+
+  <section class="tabpanel" data-tab="sessions" role="tabpanel" hidden>
+    <div class="pane wide">
+      <h2>Sessions</h2>
+      <p class="hint" id="sessionsHint">Every session saved here, newest first. Continue adds
+        radios to one; its sweeps stay in its summary.</p>
+      <div id="sessionList" class="sesslist"><span class="muted">loading…</span></div>
     </div>
   </section>
 
@@ -189,6 +199,18 @@
     <div class="buttons end">
       <button value="cancel">Cancel</button>
       <button value="ok" class="primary">Output goes into a load or test equipment</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="deleteDialog">
+  <form method="dialog">
+    <h2 id="deleteTitle">Delete this session?</h2>
+    <p id="deleteWhat"></p>
+    <p><strong>This can't be undone.</strong> Share or save the files first if you want them.</p>
+    <div class="buttons end">
+      <button value="cancel">Cancel</button>
+      <button value="ok" class="danger">Delete</button>
     </div>
   </form>
 </dialog>

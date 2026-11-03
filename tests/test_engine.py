@@ -405,3 +405,62 @@ def test_the_session_summary_comes_from_the_folder_and_survives_a_restart():
     assert sw["session"] == "Mt Test" and [r["csv"] for r in sw["sweeps"]] == [fin["csv"]]
     assert eng2.snapshot()["session_sweeps"] == sw["sweeps"]
     eng2.shutdown()
+
+
+def test_sessions_lists_session_folders_and_delete_removes_only_ours():
+    eng, q = make()
+    assert eng.handle(dict(cmd="connect"))["ok"]
+    assert eng.handle(dict(cmd="setup", session="Mt Test", radio="SIM", condition="bench"))["ok"]
+    assert eng.handle(dict(cmd="start", mode="sweep"))["ok"]
+    fin = [e for e in drain(q, lambda e: e["event"] == "run_finished")
+           if e["event"] == "run_finished"][0]
+    drain(q, lambda e: e["event"] == "state" and e["state"]["mode"] == "idle")
+    runs = eng.runs_dir
+    # an older session holding a record, a folder of another tool's runs,
+    # and a hidden/underscore folder: only the foxsinad sessions are listed
+    (runs / "Old_Peak").mkdir()
+    (runs / "Old_Peak" / "record_X.csv").write_text(
+        "# mode: foxsinad record\n# date: 2026-10-01T09:00:00\n# session: Old Peak\n"
+        "# radio: X\nt_s\n")
+    (runs / "other_tool").mkdir()
+    (runs / "other_tool" / "run.csv").write_text("# mode: hp8935 sinad\nx\n")
+    (runs / "_sim").mkdir()
+    (runs / "_sim" / "s.csv").write_text(Path(fin["csv"]).read_text())
+
+    ss = eng.handle(dict(cmd="sessions"))["sessions"]
+    assert [s["folder"] for s in ss] == ["Mt_Test", "Old_Peak"]        # newest first
+    mt, old = ss
+    assert mt["session"] == "Mt Test" and mt["current"] and mt["sweeps"] == 1
+    assert mt["radios"] == ["SIM"] and mt["path"] == str(runs / "Mt_Test")
+    assert old["session"] == "Old Peak" and old["records"] == 1 and not old["current"]
+
+    # bad names never reach outside runs/
+    for bad in ("", "..", "../other_tool", "Mt Test", "nope"):
+        assert not eng.handle(dict(cmd="delete_session", folder=bad))["ok"]
+
+    # a file foxsinad didn't make stays, with its folder; the current
+    # session is cleared, and its Finish table empties
+    (runs / "Mt_Test" / "notes.txt").write_text("keep me")
+    r = eng.handle(dict(cmd="delete_session", folder="Mt_Test"))
+    assert r["ok"] and r["deleted"] >= 1 and r["kept"] == ["notes.txt"]
+    assert not Path(fin["csv"]).exists() and (runs / "Mt_Test" / "notes.txt").exists()
+    assert eng.setup["session"] == ""
+    assert [s["folder"] for s in r["sessions"]] == ["Old_Peak"]
+    assert drain(q, lambda e: e["event"] == "session_sweeps")[-1]["sweeps"] == []
+
+    # nothing else in it: the folder goes too
+    assert eng.handle(dict(cmd="delete_session", folder="Old_Peak"))["ok"]
+    assert not (runs / "Old_Peak").exists() and (runs / "other_tool" / "run.csv").exists()
+    eng.shutdown()
+
+
+def test_delete_session_is_refused_while_running():
+    eng, q = make()
+    assert eng.handle(dict(cmd="connect"))["ok"]
+    assert eng.handle(dict(cmd="setup", session="Busy"))["ok"]
+    (eng.runs_dir / "Busy").mkdir(parents=True)
+    assert eng.handle(dict(cmd="start", mode="meter"))["ok"]
+    r = eng.handle(dict(cmd="delete_session", folder="Busy"))
+    assert not r["ok"] and "Stop" in r["error"]
+    eng.handle(dict(cmd="stop"))
+    eng.shutdown()
