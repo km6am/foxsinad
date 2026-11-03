@@ -198,26 +198,8 @@ class Engine:
         if not self.setup["session"]:
             return []
         folder = self.runs_dir / sweep.slug(self.setup["session"])
-        out = []
-        for path in sorted(folder.glob("*.csv")) if folder.is_dir() else []:
-            try:
-                m = sweep.read_header(path)
-            except OSError:
-                continue
-            if m.get("mode") != "foxsinad sweep":
-                continue                  # records, and anything else in the folder
-            png = path.with_suffix(".png")
-            out.append(dict(
-                label=m.get("label", path.stem), csv=str(path),
-                png=str(png) if png.exists() else None, date=m.get("date"),
-                point_dbm=_num(m.get("sinad12_dbm")), sigma_db=_num(m.get("sinad12_sigma_db")),
-                fit_points=None if _num(m.get("sinad12_fit_points")) is None
-                else int(_num(m.get("sinad12_fit_points"))),
-                audio_peak_dbfs=_num(m.get("audio_peak_dbfs")),
-                radio=_named(m.get("radio")), condition=_named(m.get("condition")),
-                session=self.setup["session"], pad_db=-(_num(m.get("offset_db")) or 0.0),
-                level_ref=next((k for k, v in sweep.LEVEL_REF_HEADER.items()
-                                if v == m.get("level_ref")), "output")))
+        out = [_sweep_row(path, m, self.setup["session"]) for path, m in _finished_runs(folder)
+               if m.get("mode") == "foxsinad sweep"]   # not records, nor anything else there
         return sorted(out, key=lambda r: r["date"] or "")
 
     def _emit_session_sweeps(self):
@@ -769,6 +751,34 @@ def _whole(v, lo, hi, what):
 def _round(v, n):
     """For JSON, which has no NaN: a missing or non-finite value is null."""
     return None if v is None or not math.isfinite(v) else round(v, n)
+
+
+def _finished_runs(folder):
+    """(path, header) for each finished CSV in a folder, by name. Partial
+    CSVs (a run still going, or cut off) have no header yet: skipped."""
+    for path in sorted(folder.glob("*.csv")) if folder.is_dir() else []:
+        if path.name.endswith(".partial.csv"):
+            continue
+        try:
+            yield path, sweep.read_header(path)
+        except OSError:
+            continue
+
+
+def _sweep_row(path, m, session):
+    """One finished sweep, from its CSV header, as the Finish table shows it."""
+    png = path.with_suffix(".png")
+    return dict(
+        label=m.get("label", path.stem), csv=str(path),
+        png=str(png) if png.exists() else None, date=m.get("date"),
+        point_dbm=_num(m.get("sinad12_dbm")), sigma_db=_num(m.get("sinad12_sigma_db")),
+        fit_points=None if _num(m.get("sinad12_fit_points")) is None
+        else int(_num(m.get("sinad12_fit_points"))),
+        audio_peak_dbfs=_num(m.get("audio_peak_dbfs")),
+        radio=_named(m.get("radio")), condition=_named(m.get("condition")),
+        session=session, pad_db=-(_num(m.get("offset_db")) or 0.0),
+        level_ref=next((k for k, v in sweep.LEVEL_REF_HEADER.items()
+                        if v == m.get("level_ref")), "output"))
 
 
 def _num(v):
